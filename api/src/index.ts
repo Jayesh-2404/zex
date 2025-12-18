@@ -8,7 +8,9 @@ import viewRouter from "./routes/viewRouter";
 cont app = express();
 const PORT = 3000;
 app.use(express.json());
-app.use(cors());
+app.use(cors()); 
+/* By default, browsers block a frontend (e.g., localhost:3001) from talking to a backend (localhost:3000). This line disables that block, allowing any website to call your API*/
+
 
 app.get("/api/v1/test" , (req: Request , res:Response) =.{
   try {
@@ -20,6 +22,8 @@ app.get("/api/v1/test" , (req: Request , res:Response) =.{
 
   }
 })
+
+/*Routing: This tells the server: "If a request comes to /api/v1/order, stop handling it here and pass it over to the orderRouter file." It organizes your URLs neatly. */
 app.use("/api/v1/order" , orderRouter);
 app.use("/api/v1/klines" , viewRouter);
 app.get("/api/v1/tickers" , (req: Request , res:Response)=>{
