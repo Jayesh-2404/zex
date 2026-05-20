@@ -25,16 +25,20 @@ export class RedisManager{
   }
   //publishing to queue and then waiting for it 
   public sendAndWait(message:any){
-    return new Promise((resolve)=>{
+    return new Promise(async (resolve, reject)=>{
       const id = this.getRandomId();
-      this.client.subscribe(id ,(message) => {
-        this.client.unsubscribe(id);
-        resolve(JSON.parse(message));
-      })
-      this.publisher.1Push("message" , JSON.stringify({clientId: id , message}));
+      try {
+        await this.client.subscribe(id, (message) => {
+          this.client.unsubscribe(id);
+          resolve(JSON.parse(message));
+        });
+        await this.publisher.lPush("message", JSON.stringify({ clientId: id, message }));
+      } catch (error) {
+        reject(error);
+      }
     })
   }
   public getRandomId(){
-    return uuidv4
+    return uuidv4()
   }
 }

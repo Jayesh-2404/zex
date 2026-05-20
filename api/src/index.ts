@@ -1,33 +1,32 @@
-import  express , {Request , Response} from "express";
-import cors from "cors"
-import openRouter from "./routes/order"
+import express, { Request, Response } from "express";
+import cors from "cors";
+import orderRouter from "./routes/order";
 import {RedisManager} from "./redis/redis";
 import viewRouter from "./routes/viewRouter";
 
 
-cont app = express();
+const app = express();
 const PORT = 3000;
 app.use(express.json());
 app.use(cors()); 
 /* By default, browsers block a frontend (e.g., localhost:3001) from talking to a backend (localhost:3000). This line disables that block, allowing any website to call your API*/
 
 
-app.get("/api/v1/test" , (req: Request , res:Response) =.{
+app.get("/api/v1/test", (req: Request, res: Response) => {
   try {
     res.send("Test route working !!");
-  }catch(error){
+  } catch (error) {
     console.log("Test routes failed");
-    res.status(500).json({message""Internal sever error  in Test Routes});
+    res.status(500).json({ message: "Internal server error in Test Routes" });
     return;
-
   }
-})
+});
 
 /*Routing: This tells the server: "If a request comes to /api/v1/order, stop handling it here and pass it over to the orderRouter file." It organizes your URLs neatly. */
 app.use("/api/v1/order" , orderRouter);
 app.use("/api/v1/klines" , viewRouter);
-app.get("/api/v1/tickers" , (req: Request , res:Response)=>{
-  try{
+app.get("/api/v1/tickers", (req: Request, res: Response) => {
+  try {
       const tickers = [
       {
         symbol: "SOL_USDC",
@@ -42,29 +41,29 @@ app.get("/api/v1/tickers" , (req: Request , res:Response)=>{
         trades: "540"
       }];
       res.json(tickers);
-  }catch(error){
-    console.log("Error in getting tickers " , error);
-    res.status(500).json({message:"internal server error in getting tickers"});
+  } catch (error) {
+    console.log("Error in getting tickers ", error);
+    res.status(500).json({ message: "internal server error in getting tickers" });
   }
-})
+});
 
-app.get("/api/v1/depth" , async(req :Request , res:Response)=>{
-  try{
-    const {symbol} = req.query;
-    const response = await RedisManasger.getInstance().sendAnsWait({
-      type:"GET_DEPTH",
-      data:{
-        market : symbol as string
+app.get("/api/v1/depth", async (req: Request, res: Response) => {
+  try {
+    const { symbol } = req.query;
+    const response = await RedisManager.getInstance().sendAndWait({
+      type: "GET_DEPTH",
+      data: {
+        market: symbol as string
       }
-    })
+    });
     res.status(200).json(response);
-  }catch(error){
+  } catch (error) {
     console.log("Error in getting depth");
-    res.status(500).json({message :"Error in getting depth" ,error});
+    res.status(500).json({ message: "Error in getting depth", error });
   }
-})
+});
 
-app.listen(PORT, () =>{
+app.listen(PORT, () => {
   console.log(`server running on PORT ${PORT}`)
 });
 

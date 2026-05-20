@@ -1,5 +1,5 @@
 import {Request , Response , Router} from "express";
-import {RedisManager} from "./redis/redis";
+import {RedisManager} from "../redis/redis";
 
 const orderRouter = Router();
 
@@ -25,3 +25,5 @@ orderRouter.post('/' , async(req:Request , res: Response) => {
     res.status(500).json({message:"Internal server error in creating the order"});
   }
 })
+
+export default orderRouter;
