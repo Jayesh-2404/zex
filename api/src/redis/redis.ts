@@ -1,6 +1,8 @@
 import {createClient , RedisClientType} from "redis";
 import {v4 as uuidv4} from 'uuid';
 
+const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
+
 export class RedisManager{
   //pusblishing to engine via queue
   private publisher : RedisClientType;
@@ -8,11 +10,11 @@ export class RedisManager{
   private static instance : RedisManager;
   private constructor(){
     this.client = createClient({
-      url:"redis://redis:6379"
+      url: REDIS_URL
     });
     this.client.connect();
     this.publisher = createClient({
-      url:"redis://redis:6379"
+      url: REDIS_URL
     });
     this.publisher.connect()
   }

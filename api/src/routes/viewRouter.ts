@@ -4,11 +4,11 @@ import { Client } from 'pg';
 const viewRouter = Router();
 
 const client = new Client({
-  user: 'cex',
-  host: 'postgres',
-  database: 'cex',
-  password: 'cex',
-  port: 5432,
+  user: process.env.POSTGRES_USER ?? 'cex',
+  host: process.env.POSTGRES_HOST ?? 'localhost',
+  database: process.env.POSTGRES_DB ?? 'cex',
+  password: process.env.POSTGRES_PASSWORD ?? 'cex',
+  port: Number(process.env.POSTGRES_PORT ?? 5432),
 })
 client.connect();
 
