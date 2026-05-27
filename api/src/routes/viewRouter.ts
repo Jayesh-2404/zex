@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Request, Response, Router } from "express";
 import { Client } from 'pg';
 
 const viewRouter = Router();
@@ -19,7 +19,7 @@ client.connect().catch((error) => {
   console.error("Failed to connect to Postgres", error);
 });
 
-function parseUnixSeconds(value: unknown) {
+function parseUnixSeconds(value: unknown): Date | null {
   const seconds = Number(value);
   if (!Number.isFinite(seconds)) {
     return null;
@@ -28,23 +28,27 @@ function parseUnixSeconds(value: unknown) {
   return new Date(seconds * 1000);
 }
 
-viewRouter.get("/", async (req, res) => {
+viewRouter.get("/", async (req: Request, res: Response) => {
   const { market, interval, startTime, endTime } = req.query;
   const tableName = typeof interval === 'string' ? intervalTables[interval] : undefined;
 
   if (!tableName) {
-    return res.status(400).send('Invalid interval');
+    return res.status(400).json({ message: 'Invalid interval' });
   }
 
   const startDate = parseUnixSeconds(startTime);
   const endDate = parseUnixSeconds(endTime);
 
   if (!startDate || !endDate) {
-    return res.status(400).send('Invalid time range');
+    return res.status(400).json({ message: 'Invalid time range' });
+  }
+
+  if (startDate > endDate) {
+    return res.status(400).json({ message: 'startTime must be before endTime' });
   }
 
   try {
-    const marketName = typeof market === 'string' ? market : 'SOL_USDC';
+    const marketName = typeof market === 'string' && /^[A-Z0-9]+_[A-Z0-9]+$/.test(market) ? market : 'SOL_USDC';
     const query = `
       SELECT bucket, start, open, high, low, close, volume, quote_volume, trades
       FROM ${tableName}
@@ -65,7 +69,7 @@ viewRouter.get("/", async (req, res) => {
     })));
   } catch (err) {
     console.log(err);
-    res.status(500).send(err);
+    res.status(500).json({ message: 'Failed to load klines' });
   }
 });
 export default viewRouter;

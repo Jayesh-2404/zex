@@ -2,6 +2,7 @@ import {createClient , RedisClientType} from "redis";
 import {v4 as uuidv4} from 'uuid';
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
+const DEFAULT_TIMEOUT_MS = 5000;
 
 export class RedisManager{
   //pusblishing to engine via queue
@@ -26,16 +27,23 @@ export class RedisManager{
     return this.instance;
   }
   //publishing to queue and then waiting for it 
-  public sendAndWait(message:any){
+  public sendAndWait<T = unknown>(message: unknown, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T>{
     return new Promise(async (resolve, reject)=>{
       const id = this.getRandomId();
+      const timeout = setTimeout(async () => {
+        await this.client.unsubscribe(id).catch(() => undefined);
+        reject(new Error(`Engine request timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
       try {
-        await this.client.subscribe(id, (message) => {
-          this.client.unsubscribe(id);
-          resolve(JSON.parse(message));
+        await this.client.subscribe(id, (message: string) => {
+          clearTimeout(timeout);
+          this.client.unsubscribe(id).catch(() => undefined);
+          resolve(JSON.parse(message) as T);
         });
         await this.publisher.lPush("message", JSON.stringify({ clientId: id, message }));
       } catch (error) {
+        clearTimeout(timeout);
         reject(error);
       }
     })

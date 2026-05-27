@@ -1,9 +1,12 @@
 {
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "tsc --noEmit"
+    "build": "tsc --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
+    "@types/pg": "^8.20.0",
+    "pg": "^8.21.0",
     "redis": "^5.10.0",
     "uuid": "^13.0.0"
   },

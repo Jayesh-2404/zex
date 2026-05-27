@@ -90,7 +90,7 @@ export class OrderBook {
     const fills: Fill[] = [];
     let remainingQty = parseFloat(order.quantity) - parseFloat(order.filled);
 
-    const bidPrices = [...this.bidPrices].reverse();
+    const bidPrices = [...this.bidPrices];
     for (const bidPrice of bidPrices) {
       if (remainingQty <= 1e-8 || bidPrice < parseFloat(order.price)) break;
 
