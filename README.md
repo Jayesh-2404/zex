@@ -2,6 +2,8 @@
 
 Backend API for a small exchange-style service. It exposes order, depth, ticker, and kline endpoints and uses Redis for engine messaging plus Postgres for kline storage.
 
+See [docs/PROJECT.md](docs/PROJECT.md) for short project notes and next work.
+
 ## Setup
 
 Start Redis and Postgres:
