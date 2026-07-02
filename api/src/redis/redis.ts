@@ -19,6 +19,7 @@ export class RedisManager{
     });
     this.publisher.connect()
   }
+  // TODO: add disconnect logic for graceful shutdown
   public static getInstance(){
     if(!this.instance){
       this.instance = new RedisManager();
