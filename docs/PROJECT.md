@@ -6,6 +6,7 @@ Zex is a small exchange-style backend. It has:
 
 - API service for orders, depth, tickers, and klines.
 - Matching engine using Redis queue/pubsub.
+- Open order cancellation with owner checks.
 - Postgres storage for trades and kline tables.
 
 ## Services
@@ -27,10 +28,10 @@ cd api && npm run dev
 
 - Engine builds.
 - Orderbook tests pass.
-- API needs `@types/express` before TypeScript build passes.
+- API builds.
 
 ## Next Work
 
-1. Add missing API type dependency.
-2. Run full API + engine smoke test.
-3. Add kline aggregation from persisted trades.
+1. Run full API + engine smoke test.
+2. Add kline aggregation from persisted trades.
+3. Add durable order storage and recovery.

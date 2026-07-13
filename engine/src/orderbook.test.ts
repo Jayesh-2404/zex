@@ -63,3 +63,50 @@ test("leaves remaining quantity on the book after partial fill", () => {
     asks: [],
   });
 });
+
+test("cancels an open order and removes empty price levels", () => {
+  const book = new OrderBook("SOL_USDC");
+
+  book.addOrder(order({ id: "bid-1", price: "10", quantity: "2", side: "buy", userId: "maker" }));
+  book.addOrder(order({ id: "ask-1", price: "12", quantity: "3", side: "sell", userId: "maker" }));
+
+  const result = book.cancelOrder("bid-1", "maker");
+
+  assert.equal(result.status, "cancelled");
+  assert.deepEqual(book.getDepth(), {
+    bids: [],
+    asks: [{ price: "12", quantity: "3" }],
+  });
+});
+
+test("rejects cancellation from a different user", () => {
+  const book = new OrderBook("SOL_USDC");
+
+  book.addOrder(order({ id: "ask-1", price: "12", quantity: "3", side: "sell", userId: "maker" }));
+
+  const result = book.cancelOrder("ask-1", "other-user");
+
+  assert.equal(result.status, "owner_mismatch");
+  assert.deepEqual(book.getDepth(), {
+    bids: [],
+    asks: [{ price: "12", quantity: "3" }],
+  });
+});
+
+test("cancels only the remaining quantity after a partial fill", () => {
+  const book = new OrderBook("SOL_USDC");
+
+  book.addOrder(order({ id: "ask-1", price: "10", quantity: "1", side: "sell", userId: "maker" }));
+  book.addOrder(order({ id: "buy-1", price: "10", quantity: "3", side: "buy", userId: "taker" }));
+
+  const result = book.cancelOrder("buy-1", "taker");
+
+  assert.equal(result.status, "cancelled");
+  if (result.status === "cancelled") {
+    assert.equal(result.order.quantity, "2");
+  }
+  assert.deepEqual(book.getDepth(), {
+    bids: [],
+    asks: [],
+  });
+});

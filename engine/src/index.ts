@@ -214,6 +214,48 @@ async function startEngine() {
           response = { type: "DEPTH", payload: { market: data.market, ...depth } };
           break;
         }
+        case "CANCEL_ORDER": {
+          const book = getOrderBook(data.market);
+          const cancelResult = book.cancelOrder(data.orderId, data.userId);
+
+          if (cancelResult.status === "cancelled") {
+            response = {
+              type: "ORDER_CANCELLED",
+              payload: {
+                orderId: cancelResult.order.id,
+                market: data.market,
+                price: cancelResult.order.price,
+                quantity: cancelResult.order.quantity,
+                filled: cancelResult.order.filled,
+                side: cancelResult.order.side,
+                status: "cancelled",
+              },
+            };
+          } else if (cancelResult.status === "owner_mismatch") {
+            response = {
+              type: "ORDER_CANCEL_REJECTED",
+              payload: {
+                orderId: data.orderId,
+                market: data.market,
+                status: "rejected",
+                reason: "ORDER_OWNER_MISMATCH",
+                message: "Order belongs to a different user",
+              },
+            };
+          } else {
+            response = {
+              type: "ORDER_CANCEL_REJECTED",
+              payload: {
+                orderId: data.orderId,
+                market: data.market,
+                status: "rejected",
+                reason: "ORDER_NOT_FOUND",
+                message: "Open order was not found",
+              },
+            };
+          }
+          break;
+        }
         case "GET_TICKERS": {
           response = { type: "TICKERS", payload: getTickers() };
           break;

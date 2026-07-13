@@ -21,6 +21,11 @@ export interface DepthSnapshot {
   asks: { price: string; quantity: string }[];
 }
 
+export type CancelOrderResult =
+  | { status: "cancelled"; order: Order }
+  | { status: "not_found" }
+  | { status: "owner_mismatch"; order: Order };
+
 export class OrderBook {
   private bids: Map<string, Order[]> = new Map();
   private asks: Map<string, Order[]> = new Map();
@@ -31,6 +36,14 @@ export class OrderBook {
 
   addOrder(order: Order): { fills: Fill[]; remainingOrder?: Order } {
     return order.side === "buy" ? this.matchBuy(order) : this.matchSell(order);
+  }
+
+  cancelOrder(orderId: string, userId: string): CancelOrderResult {
+    return (
+      this.cancelFromSide(orderId, userId, "bids") ??
+      this.cancelFromSide(orderId, userId, "asks") ??
+      { status: "not_found" }
+    );
   }
 
   private matchBuy(order: Order): { fills: Fill[]; remainingOrder?: Order } {
@@ -151,6 +164,37 @@ export class OrderBook {
       priceArr.sort(sortFn);
     }
     book.get(key)!.push(order);
+  }
+
+  private cancelFromSide(orderId: string, userId: string, side: "bids" | "asks"): CancelOrderResult | undefined {
+    const book = side === "bids" ? this.bids : this.asks;
+    const priceArr = side === "bids" ? this.bidPrices : this.askPrices;
+
+    for (const [price, orders] of book) {
+      const index = orders.findIndex((order) => order.id === orderId);
+      if (index === -1) {
+        continue;
+      }
+
+      const order = orders[index];
+      if (order.userId !== userId) {
+        return { status: "owner_mismatch", order };
+      }
+
+      orders.splice(index, 1);
+      if (orders.length === 0) {
+        book.delete(price);
+        const numericPrice = Number(price);
+        const priceIndex = priceArr.findIndex((value) => value === numericPrice);
+        if (priceIndex !== -1) {
+          priceArr.splice(priceIndex, 1);
+        }
+      }
+
+      return { status: "cancelled", order };
+    }
+
+    return undefined;
   }
 
   getDepth(): DepthSnapshot {
