@@ -7,7 +7,9 @@ Zex is a small exchange-style backend. It has:
 - API service for orders, depth, tickers, and klines.
 - Matching engine using Redis queue/pubsub.
 - Open order cancellation with owner checks.
-- Postgres storage for trades and kline tables.
+- Postgres storage for trades and live OHLCV kline aggregation.
+- Durable open-order snapshots and startup recovery.
+- Create-order idempotency keys backed by a Postgres command journal.
 
 ## Services
 
@@ -27,18 +29,39 @@ cd api && npm run dev
 ## Current Status
 
 - Engine builds.
-- Orderbook tests pass.
+- Orderbook and persistence tests pass.
 - API builds.
+- Persisted fills are rolled into `1m`, `1h`, and UTC-week candles for the kline API.
+- Engine startup restores open orders from Postgres before consuming new Redis commands.
+- Duplicate create-order retries with the same `Idempotency-Key` replay the original response; conflicting reuse returns `409`.
 
 ## Next Work
 
 1. Run full API + engine smoke test.
-2. Add kline aggregation from persisted trades.
-3. Add durable order storage and recovery.
+2. Add WebSocket or Server-Sent Events streams for depth, trades, and user order updates.
+3. Tighten the command journal into a full pending/completed lifecycle for crash recovery between in-memory book mutation and journal write.
+
+## Backend Resume Story
+
+- Built an exchange-style backend with an Express API, Redis-backed request/response messaging, and a separate matching engine.
+- Implemented price-time priority matching with partial fills, owner-checked cancellations, order book depth, and ticker statistics.
+- Persisted trades to Postgres and aggregated fills into `1m`, `1h`, and UTC-week OHLCV candles using conflict-safe upserts.
+- Added durable open-order snapshots and startup recovery so the in-memory engine can rebuild active books after restart.
+- Added create-order idempotency using client-provided keys, request hashing, and response replay from a Postgres command journal.
+- Covered matching, cancellation, snapshot/restore, kline bucketing, and command journal behavior with Node test runner tests.
+
+## Technical Round Discussion Points
+
+- Why the matching engine is isolated from the API and consumes serialized commands through Redis.
+- How the system handles partial fills, maker/taker metadata, and open-order cancellation authorization.
+- Tradeoffs of an in-memory order book with Postgres snapshots versus a fully event-sourced command journal.
+- How OHLCV candles are updated from fills and why UTC interval boundaries matter for market data.
+- How idempotency keys prevent duplicate orders on client/API retries, and where pending-command recovery would be needed for crash windows.
+- Failure modes still worth solving: Redis delivery guarantees, snapshot consistency, pending command recovery, and real-time market streams.
 
 ---
 
-## Frontend Plan
+## Deferred Frontend Plan
 
 ### Purpose
 

@@ -1,7 +1,8 @@
 import { createClient } from "redis";
 import { v4 as uuidv4 } from "uuid";
-import { Client } from "pg";
 import { Fill, OrderBook, Order } from "./orderbook.js";
+import { TradeStore } from "./persistence.js";
+import { hashCreateOrderCommand, idempotencyConflictResponse } from "./commands.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const QUEUE_KEY = "message";
@@ -21,82 +22,23 @@ interface MarketStats {
   trades: number;
 }
 
-class TradeStore {
-  private client = new Client({
-    user: process.env.POSTGRES_USER ?? "cex",
-    host: process.env.POSTGRES_HOST ?? "localhost",
-    database: process.env.POSTGRES_DB ?? "cex",
-    password: process.env.POSTGRES_PASSWORD ?? "cex",
-    port: Number(process.env.POSTGRES_PORT ?? 5432),
-  });
-  private ready = false;
-
-  async connect(): Promise<void> {
-    try {
-      await this.client.connect();
-      await this.client.query(`
-        CREATE TABLE IF NOT EXISTS trades (
-          id BIGSERIAL PRIMARY KEY,
-          market TEXT NOT NULL,
-          price NUMERIC NOT NULL,
-          quantity NUMERIC NOT NULL,
-          maker_order_id TEXT NOT NULL,
-          taker_order_id TEXT NOT NULL,
-          maker_user_id TEXT NOT NULL,
-          taker_user_id TEXT NOT NULL,
-          taker_side TEXT NOT NULL CHECK (taker_side IN ('buy', 'sell')),
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `);
-      await this.client.query(`
-        CREATE INDEX IF NOT EXISTS trades_market_created_at_idx
-          ON trades (market, created_at DESC)
-      `);
-      this.ready = true;
-      console.log("Engine connected to Postgres");
-    } catch (error) {
-      console.warn("Trade persistence disabled; Postgres connection failed", error);
-    }
-  }
-
-  async saveFills(market: string, takerSide: OrderSide, fills: Fill[]): Promise<void> {
-    if (!this.ready || fills.length === 0) {
-      return;
-    }
-
-    for (const fill of fills) {
-      try {
-        await this.client.query(
-          `
-            INSERT INTO trades (
-              market, price, quantity, maker_order_id, taker_order_id,
-              maker_user_id, taker_user_id, taker_side
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          `,
-          [
-            market,
-            fill.price,
-            fill.quantity,
-            fill.makerOrderId,
-            fill.takerOrderId,
-            fill.makerUserId,
-            fill.takerUserId,
-            takerSide,
-          ],
-        );
-      } catch (error) {
-        console.error("Failed to persist trade", error);
-      }
-    }
-  }
-}
-
 function getOrderBook(market: string): OrderBook {
   if (!orderBooks.has(market)) {
     orderBooks.set(market, new OrderBook(market));
   }
   return orderBooks.get(market)!;
+}
+
+async function restoreOpenOrders(tradeStore: TradeStore): Promise<void> {
+  const openOrders = await tradeStore.loadOpenOrders();
+
+  for (const { market, ...order } of openOrders) {
+    getOrderBook(market).restoreOpenOrder(order);
+  }
+
+  if (openOrders.length > 0) {
+    console.log(`Restored ${openOrders.length} open orders from Postgres`);
+  }
 }
 
 function getStats(market: string): MarketStats {
@@ -161,6 +103,7 @@ async function startEngine() {
   const tradeStore = new TradeStore();
 
   await tradeStore.connect();
+  await restoreOpenOrders(tradeStore);
   await client.connect();
   console.log("Engine connected to Redis");
 
@@ -176,6 +119,23 @@ async function startEngine() {
 
       switch (type) {
         case "CREATE_ORDER": {
+          const requestHash = hashCreateOrderCommand(data);
+          const journalResult = await tradeStore.getCommandJournalResult(
+            data.idempotencyKey,
+            data.userId,
+            "CREATE_ORDER",
+            requestHash,
+          );
+
+          if (journalResult.status === "hit") {
+            response = journalResult.response;
+            break;
+          }
+          if (journalResult.status === "conflict") {
+            response = idempotencyConflictResponse(data.idempotencyKey);
+            break;
+          }
+
           const book = getOrderBook(data.market);
           const order: Order = {
             id: uuidv4(),
@@ -188,6 +148,7 @@ async function startEngine() {
           const result = book.addOrder(order);
           recordFills(data.market, result.fills);
           await tradeStore.saveFills(data.market, data.side, result.fills);
+          await tradeStore.saveOpenOrdersSnapshot(data.market, book.getOpenOrders());
 
           const totalFilled = parseFloat(order.filled);
           const totalQty = parseFloat(order.quantity);
@@ -206,6 +167,13 @@ async function startEngine() {
               fills: result.fills,
             },
           };
+          await tradeStore.saveCommandJournalResult(
+            data.idempotencyKey,
+            data.userId,
+            "CREATE_ORDER",
+            requestHash,
+            response,
+          );
           break;
         }
         case "GET_DEPTH": {
@@ -219,6 +187,7 @@ async function startEngine() {
           const cancelResult = book.cancelOrder(data.orderId, data.userId);
 
           if (cancelResult.status === "cancelled") {
+            await tradeStore.saveOpenOrdersSnapshot(data.market, book.getOpenOrders());
             response = {
               type: "ORDER_CANCELLED",
               payload: {

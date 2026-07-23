@@ -38,6 +38,19 @@ export class OrderBook {
     return order.side === "buy" ? this.matchBuy(order) : this.matchSell(order);
   }
 
+  restoreOpenOrder(order: Order): void {
+    const side = order.side === "buy" ? "bids" : "asks";
+    const sortFn = order.side === "buy" ? (a: number, b: number) => b - a : (a: number, b: number) => a - b;
+    this.addToBook({ ...order }, side, sortFn);
+  }
+
+  getOpenOrders(): Order[] {
+    return [
+      ...this.bidPrices.flatMap((price) => this.bids.get(price.toString()) ?? []),
+      ...this.askPrices.flatMap((price) => this.asks.get(price.toString()) ?? []),
+    ].map((order) => ({ ...order }));
+  }
+
   cancelOrder(orderId: string, userId: string): CancelOrderResult {
     return (
       this.cancelFromSide(orderId, userId, "bids") ??

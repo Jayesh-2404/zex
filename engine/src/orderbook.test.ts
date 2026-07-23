@@ -110,3 +110,40 @@ test("cancels only the remaining quantity after a partial fill", () => {
     asks: [],
   });
 });
+
+test("snapshots open orders for durable recovery", () => {
+  const book = new OrderBook("SOL_USDC");
+
+  book.addOrder(order({ id: "bid-1", price: "10", quantity: "2", side: "buy", userId: "buyer" }));
+  book.addOrder(order({ id: "ask-1", price: "12", quantity: "3", side: "sell", userId: "seller" }));
+
+  assert.deepEqual(book.getOpenOrders(), [
+    order({ id: "bid-1", price: "10", quantity: "2", side: "buy", userId: "buyer" }),
+    order({ id: "ask-1", price: "12", quantity: "3", side: "sell", userId: "seller" }),
+  ]);
+});
+
+test("restores open orders without matching them again", () => {
+  const book = new OrderBook("SOL_USDC");
+
+  book.restoreOpenOrder(order({ id: "bid-1", price: "10", quantity: "2", side: "buy", userId: "buyer" }));
+  book.restoreOpenOrder(order({ id: "ask-1", price: "10", quantity: "3", side: "sell", userId: "seller" }));
+
+  assert.deepEqual(book.getDepth(), {
+    bids: [{ price: "10", quantity: "2" }],
+    asks: [{ price: "10", quantity: "3" }],
+  });
+});
+
+test("restores partially filled maker orders with only remaining quantity in depth", () => {
+  const book = new OrderBook("SOL_USDC");
+
+  book.restoreOpenOrder(
+    order({ id: "ask-1", price: "12", quantity: "3", filled: "1", side: "sell", userId: "seller" }),
+  );
+
+  assert.deepEqual(book.getDepth(), {
+    bids: [],
+    asks: [{ price: "12", quantity: "2" }],
+  });
+});

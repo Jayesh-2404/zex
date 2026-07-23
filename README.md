@@ -1,6 +1,6 @@
 # Zex
 
-Backend API for a small exchange-style service. It exposes order, depth, ticker, and kline endpoints and uses Redis for engine messaging plus Postgres for kline storage.
+Backend API for a small exchange-style service. It exposes order, depth, ticker, and kline endpoints and uses Redis for engine messaging plus Postgres for trade, OHLCV kline, open-order recovery, and idempotency journal storage.
 
 See [docs/PROJECT.md](docs/PROJECT.md) for short project notes and next work.
 
@@ -31,7 +31,16 @@ The API runs on `http://localhost:3000`.
 - `GET /api/v1/tickers`
 - `GET /api/v1/klines?market=SOL_USDC&interval=1m&startTime=0&endTime=9999999999`
 
-Postgres tables are initialized from `db/init` when the database volume is first created.
+Postgres tables are initialized from `db/init` when the database volume is first created. The engine also creates missing persistence tables at startup, restores open orders from Postgres, snapshots open orders after book mutations, rolls each persisted fill into `1m`, `1h`, and UTC-week candles, and replays matching create-order responses for duplicate `Idempotency-Key` retries.
+
+Create order requests can include an optional idempotency key:
+
+```bash
+curl -X POST http://localhost:3000/api/v1/order \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-user-1-0001" \
+  -d '{"market":"SOL_USDC","price":"10","quantity":"1","side":"buy","userId":"user-1"}'
+```
 
 Cancel an open order with:
 
