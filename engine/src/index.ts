@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { Fill, OrderBook, Order } from "./orderbook.js";
 import { TradeStore } from "./persistence.js";
 import { hashCreateOrderCommand, idempotencyConflictResponse } from "./commands.js";
+import { getUserOpenOrders } from "./openOrders.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const QUEUE_KEY = "message";
@@ -227,6 +228,14 @@ async function startEngine() {
         }
         case "GET_TICKERS": {
           response = { type: "TICKERS", payload: getTickers() };
+          break;
+        }
+        case "GET_OPEN_ORDERS": {
+          const book = getOrderBook(data.market);
+          response = {
+            type: "OPEN_ORDERS",
+            payload: getUserOpenOrders(data.market, book.getOpenOrders(), data.userId),
+          };
           break;
         }
         default:

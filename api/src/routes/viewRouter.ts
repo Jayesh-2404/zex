@@ -15,7 +15,11 @@ const client = new Client({
   password: process.env.POSTGRES_PASSWORD ?? 'cex',
   port: Number(process.env.POSTGRES_PORT ?? 5432),
 })
-client.connect().catch((error) => {
+let postgresReady = false;
+client.connect().then(() => {
+  postgresReady = true;
+  console.log("Postgres connected for klines");
+}).catch((error) => {
   console.error("Failed to connect to Postgres", error);
 });
 
@@ -45,6 +49,10 @@ viewRouter.get("/", async (req: Request, res: Response) => {
 
   if (startDate > endDate) {
     return res.status(400).json({ message: 'startTime must be before endTime' });
+  }
+
+  if (!postgresReady) {
+    return res.status(503).json({ message: 'Klines are unavailable because Postgres is not reachable' });
   }
 
   try {
