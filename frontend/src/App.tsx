@@ -447,7 +447,17 @@ function ChartPanel({ klines, error }: { klines: Kline[]; error?: string }) {
   );
 }
 
-function OpenOrdersPanel({ orders, error }: { orders: OpenOrder[]; error?: string }) {
+function OpenOrdersPanel({
+  orders,
+  error,
+  cancellingId,
+  onCancel,
+}: {
+  orders: OpenOrder[];
+  error?: string;
+  cancellingId?: string;
+  onCancel: (orderId: string) => void;
+}) {
   return (
     <section className="panel openOrdersPanel">
       <div className="panelHeader">
@@ -465,6 +475,14 @@ function OpenOrdersPanel({ orders, error }: { orders: OpenOrder[]; error?: strin
               <span>{formatNumber(order.price)}</span>
               <span>{formatNumber(remainingQuantity(order))}</span>
               <span>{order.id.slice(0, 8)}</span>
+              <button
+                type="button"
+                className="cancelButton"
+                disabled={cancellingId === order.id}
+                onClick={() => onCancel(order.id)}
+              >
+                {cancellingId === order.id ? "..." : "Cancel"}
+              </button>
             </div>
           ))}
         </div>
@@ -514,6 +532,8 @@ export default function App() {
   const [klines, setKlines] = useState<PanelState<Kline[]>>({ data: [] });
   const [orders, setOrders] = useState<PanelState<OpenOrder[]>>({ data: [] });
   const [trades, setTrades] = useState<PanelState<RecentTrade[]>>({ data: [] });
+  const [cancellingId, setCancellingId] = useState<string>();
+  const [cancelError, setCancelError] = useState<string>();
 
   const loadMarketData = useCallback(async () => {
     const now = Math.floor(Date.now() / 1000);
@@ -547,9 +567,87 @@ export default function App() {
 
   useEffect(() => {
     void loadMarketData();
-    const timer = window.setInterval(() => void loadMarketData(), 2000);
-    return () => window.clearInterval(timer);
   }, [loadMarketData]);
+
+  useEffect(() => {
+    const source = new EventSource(`${API_BASE_URL}/api/v1/stream`);
+
+    source.onmessage = (event) => {
+      let payload: { type: string; market?: string; userId?: string; data?: any };
+      try {
+        payload = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+
+      if (payload.type === "depth" && payload.market === market) {
+        setDepth({ data: { market: payload.market, bids: payload.data.bids, asks: payload.data.asks } });
+      } else if (payload.type === "openOrders" && payload.market === market && payload.userId === userId) {
+        setOrders({ data: payload.data });
+        setCancelError(undefined);
+      } else if (payload.type === "trade" && payload.market === market) {
+        const trade: RecentTrade = {
+          id: `${payload.data.makerOrderId}-${payload.data.takerOrderId}-${payload.data.quantity}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          market,
+          price: payload.data.price,
+          quantity: payload.data.quantity,
+          makerOrderId: payload.data.makerOrderId,
+          takerOrderId: payload.data.takerOrderId,
+          makerUserId: payload.data.makerUserId,
+          takerUserId: payload.data.takerUserId,
+          takerSide: payload.data.takerSide,
+          createdAt: payload.data.createdAt ?? new Date().toISOString(),
+        };
+        setTrades((current) => ({ data: [trade, ...current.data].slice(0, 25) }));
+      }
+    };
+
+    return () => source.close();
+  }, [market, userId]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      fetchJson<Ticker[]>("/api/v1/tickers")
+        .then((data) => setTickers({ data }))
+        .catch((error: Error) => setTickers((current) => ({ ...current, error: error.message })));
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const now = Math.floor(Date.now() / 1000);
+    const start = now - 60 * 60 * 6;
+    const loadKlines = () => {
+      const klineParams = new URLSearchParams({
+        market,
+        interval: "1m",
+        startTime: start.toString(),
+        endTime: now.toString(),
+      });
+      fetchJson<Kline[]>(`/api/v1/klines?${klineParams.toString()}`)
+        .then((data) => setKlines({ data }))
+        .catch((error: Error) => setKlines((current) => ({ ...current, error: error.message })));
+    };
+    void loadKlines();
+    const timer = window.setInterval(loadKlines, 15000);
+    return () => window.clearInterval(timer);
+  }, [market]);
+
+  async function cancelOrder(orderId: string): Promise<void> {
+    setCancellingId(orderId);
+    setCancelError(undefined);
+    try {
+      await fetchJson<unknown>(`/api/v1/order/${orderId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ market, userId }),
+      });
+    } catch (error) {
+      setCancelError(error instanceof Error ? error.message : "Cancel failed");
+    } finally {
+      setCancellingId(undefined);
+    }
+  }
 
   async function submitOrder(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -619,7 +717,12 @@ export default function App() {
         </div>
         <div className="centerStack">
           <ChartPanel klines={klines.data} error={klines.error} />
-          <OpenOrdersPanel orders={orders.data} error={orders.error} />
+          <OpenOrdersPanel
+            orders={orders.data}
+            error={orders.error ?? cancelError}
+            cancellingId={cancellingId}
+            onCancel={(orderId) => void cancelOrder(orderId)}
+          />
         </div>
         <div className="rightStack">
           <OrderBookPanel depth={depth.data} error={depth.error} />

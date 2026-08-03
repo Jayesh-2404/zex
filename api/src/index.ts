@@ -205,6 +205,34 @@ app.get("/api/v1/trades/recent", async (req: Request, res: Response) => {
   }
 });
 
+const STREAM_CHANNEL = "zex:events";
+
+app.get("/api/v1/stream", async (req: Request, res: Response) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  const subscriber = createClient({ url: REDIS_URL });
+  const heartbeat = setInterval(() => res.write(": ping\n\n"), 15000);
+
+  try {
+    await subscriber.connect();
+    await subscriber.subscribe(STREAM_CHANNEL, (message: string) => {
+      res.write(`data: ${message}\n\n`);
+    });
+  } catch (error) {
+    console.error("Failed to subscribe for market stream", error);
+    res.write(`data: ${JSON.stringify({ type: "error", message: "Stream unavailable" })}\n\n`);
+  }
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    subscriber.unsubscribe(STREAM_CHANNEL).catch(() => undefined);
+    subscriber.quit().catch(() => undefined);
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`server running on PORT ${PORT}`)
 });

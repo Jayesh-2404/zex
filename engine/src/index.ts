@@ -7,6 +7,7 @@ import { getUserOpenOrders } from "./openOrders.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const QUEUE_KEY = "message";
+const EVENTS_CHANNEL = "zex:events";
 
 const orderBooks = new Map<string, OrderBook>();
 const marketStats = new Map<string, MarketStats>();
@@ -108,6 +109,28 @@ async function startEngine() {
   await client.connect();
   console.log("Engine connected to Redis");
 
+  async function publishEvent(event: object): Promise<void> {
+    try {
+      await client.publish(EVENTS_CHANNEL, JSON.stringify(event));
+    } catch (error) {
+      console.error("Failed to publish event", error);
+    }
+  }
+
+  async function publishMarketEvents(market: string, affectedUsers: string[]): Promise<void> {
+    const depth = getOrderBook(market).getDepth();
+    await publishEvent({ type: "depth", market, data: depth });
+
+    for (const user of affectedUsers) {
+      await publishEvent({
+        type: "openOrders",
+        market,
+        userId: user,
+        data: getUserOpenOrders(market, getOrderBook(market).getOpenOrders(), user),
+      });
+    }
+  }
+
   for (;;) {
     try {
       const result = await client.brPop(QUEUE_KEY, 0);
@@ -175,6 +198,27 @@ async function startEngine() {
             requestHash,
             response,
           );
+
+          const affectedUsers = Array.from(
+            new Set([data.userId, ...result.fills.map((fill) => fill.makerUserId)]),
+          );
+          await publishMarketEvents(data.market, affectedUsers);
+          for (const fill of result.fills) {
+            await publishEvent({
+              type: "trade",
+              market: data.market,
+              data: {
+                price: fill.price,
+                quantity: fill.quantity,
+                makerOrderId: fill.makerOrderId,
+                takerOrderId: fill.takerOrderId,
+                makerUserId: fill.makerUserId,
+                takerUserId: fill.takerUserId,
+                takerSide: data.side,
+                createdAt: new Date().toISOString(),
+              },
+            });
+          }
           break;
         }
         case "GET_DEPTH": {
@@ -187,8 +231,9 @@ async function startEngine() {
           const book = getOrderBook(data.market);
           const cancelResult = book.cancelOrder(data.orderId, data.userId);
 
-          if (cancelResult.status === "cancelled") {
+if (cancelResult.status === "cancelled") {
             await tradeStore.saveOpenOrdersSnapshot(data.market, book.getOpenOrders());
+            await publishMarketEvents(data.market, [data.userId]);
             response = {
               type: "ORDER_CANCELLED",
               payload: {

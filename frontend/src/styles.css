@@ -525,6 +525,31 @@ button {
   grid-template-columns: 70px 1fr 1fr 72px;
 }
 
+.openOrdersPanel .tableRow {
+  grid-template-columns: 58px 1fr 1fr 62px 76px;
+}
+
+.cancelButton {
+  min-height: 26px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--ink-soft);
+  background: var(--paper);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.cancelButton:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.cancelButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 @media (max-width: 1180px) {
   .layoutGrid {
     grid-template-columns: minmax(280px, 360px) minmax(420px, 1fr);
@@ -585,5 +610,9 @@ button {
   .openOrdersPanel .tableRow,
   .tradesPanel .tableRow {
     grid-template-columns: 58px 1fr 1fr 64px;
+  }
+
+  .openOrdersPanel .tableRow {
+    grid-template-columns: 52px 1fr 1fr 56px 72px;
   }
 }
