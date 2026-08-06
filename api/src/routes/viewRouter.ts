@@ -80,4 +80,9 @@ viewRouter.get("/", async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Failed to load klines' });
   }
 });
+
+export function closeKlineClient(): Promise<void> {
+  return client.end().catch(() => undefined);
+}
+
 export default viewRouter;

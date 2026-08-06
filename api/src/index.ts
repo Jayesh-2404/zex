@@ -4,7 +4,7 @@ import { Client } from "pg";
 import { createClient } from "redis";
 import orderRouter from "./routes/order";
 import {RedisManager} from "./redis/redis";
-import viewRouter from "./routes/viewRouter";
+import viewRouter, { closeKlineClient } from "./routes/viewRouter";
 
 
 const app = express();
@@ -236,4 +236,14 @@ app.get("/api/v1/stream", async (req: Request, res: Response) => {
 app.listen(PORT, () => {
   console.log(`server running on PORT ${PORT}`)
 });
+
+async function shutdown(signal: string): Promise<void> {
+  console.log(`${signal} received, shutting down API`);
+  await closeKlineClient();
+  await RedisManager.getInstance().disconnect();
+  process.exit(0);
+}
+
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
 

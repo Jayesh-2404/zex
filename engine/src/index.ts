@@ -109,6 +109,16 @@ async function startEngine() {
   await client.connect();
   console.log("Engine connected to Redis");
 
+  async function shutdown(signal: string): Promise<void> {
+    console.log(`${signal} received, shutting down engine`);
+    await client.quit().catch(() => undefined);
+    await tradeStore.close();
+    process.exit(0);
+  }
+
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
   async function publishEvent(event: object): Promise<void> {
     try {
       await client.publish(EVENTS_CHANNEL, JSON.stringify(event));

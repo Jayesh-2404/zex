@@ -106,6 +106,18 @@ export class TradeStore {
     }
   }
 
+  async close(): Promise<void> {
+    const end = (this.client as { end?: () => Promise<unknown> }).end;
+    if (!end) {
+      return;
+    }
+    try {
+      await end.call(this.client);
+    } catch (error) {
+      console.error("Failed to close Postgres connection", error);
+    }
+  }
+
   async saveFills(market: string, takerSide: OrderSide, fills: Fill[]): Promise<void> {
     if (!this.ready || fills.length === 0) {
       return;

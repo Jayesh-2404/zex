@@ -19,7 +19,11 @@ export class RedisManager{
     });
     this.publisher.connect()
   }
-  // TODO: add disconnect logic for graceful shutdown
+  public async disconnect(): Promise<void> {
+    await this.client.quit().catch(() => undefined);
+    await this.publisher.quit().catch(() => undefined);
+  }
+
   public static getInstance(){
     if(!this.instance){
       this.instance = new RedisManager();
