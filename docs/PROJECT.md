@@ -1,67 +1,100 @@
 # Zex Project Notes
 
+Design rationale and known tradeoffs live in [ARCHITECTURE.md](ARCHITECTURE.md).
+This file tracks what is built and what comes next.
+
 ## What It Is
 
-Zex is a small exchange-style backend. It has:
+An exchange-style backend:
 
-- API service for orders, depth, tickers, and klines.
-- Matching engine using Redis queue/pubsub.
-- Open order cancellation with owner checks.
-- Postgres storage for trades and live OHLCV kline aggregation.
-- Durable open-order snapshots and startup recovery.
-- Create-order idempotency keys backed by a Postgres command journal.
+- API service for orders, depth, tickers, klines, open orders, and recent trades.
+- Separate matching engine consuming serialized commands from a Redis list.
+- Owner-checked order cancellation.
+- Postgres storage for trades, OHLCV kline aggregation, open-order snapshots, and a command journal.
+- Server-Sent Events stream for depth, fills, and per-user open orders.
 
 ## Services
 
 - `api`: Express API on port `3000`.
-- `engine`: In-memory orderbook and trade persistence.
-- `redis`: Messaging between API and engine.
-- `postgres`: Trade and kline storage.
+- `engine`: Single-writer in-memory order book plus trade persistence.
+- `redis`: Command transport between API and engine.
+- `postgres`: Trades, klines, open orders, command journal.
 
-## Run
-
-```bash
-docker compose up -d
-cd engine && npm run dev
-cd api && npm run dev
-```
+All four run with `docker compose up -d`. See the README.
 
 ## Current Status
 
-- Engine builds.
-- Orderbook and persistence tests pass.
-- API builds.
-- Persisted fills are rolled into `1m`, `1h`, and UTC-week candles for the kline API.
-- Engine startup restores open orders from Postgres before consuming new Redis commands.
-- Duplicate create-order retries with the same `Idempotency-Key` replay the original response; conflicting reuse returns `409`.
-
-## Next Work
-
-1. Run full API + engine smoke test.
-2. Add WebSocket or Server-Sent Events streams for depth, trades, and user order updates.
-3. Tighten the command journal into a full pending/completed lifecycle for crash recovery between in-memory book mutation and journal write.
+- Engine and API both typecheck; 50 tests pass (35 engine, 15 API).
+- Price and quantity are handled as exact scaled `bigint`, validated on the API
+  side against the engine's grammar and held in place by a parity test.
+- Order results persist in a single Postgres transaction covering fills, klines,
+  the open-order snapshot, and the idempotency journal row.
+- Engine restores open orders and 24h ticker stats from Postgres before
+  consuming commands.
+- Engine replies `ENGINE_ERROR` on a failed command instead of leaving the
+  caller to time out; the API surfaces it as a `503`.
+- SSE streams are live and the frontend consumes them.
 
 ## Backend Resume Story
 
-- Built an exchange-style backend with an Express API, Redis-backed request/response messaging, and a separate matching engine.
-- Implemented price-time priority matching with partial fills, owner-checked cancellations, order book depth, and ticker statistics.
-- Persisted trades to Postgres and aggregated fills into `1m`, `1h`, and UTC-week OHLCV candles using conflict-safe upserts.
-- Added durable open-order snapshots and startup recovery so the in-memory engine can rebuild active books after restart.
-- Added create-order idempotency using client-provided keys, request hashing, and response replay from a Postgres command journal.
-- Covered matching, cancellation, snapshot/restore, kline bucketing, and command journal behavior with Node test runner tests.
+- Built an exchange-style backend with an Express API, Redis-backed
+  request/response messaging, and a separate single-writer matching engine.
+- Implemented price-time priority matching with partial fills, owner-checked
+  cancellations, order book depth, and ticker statistics.
+- Replaced float arithmetic with scaled `bigint` fixed-point math, and made the
+  API reject any decimal the engine would silently truncate.
+- Persisted trades to Postgres and aggregated fills into `1m`, `1h`, and
+  UTC-week OHLCV candles using conflict-safe upserts.
+- Committed order results atomically so the in-memory book, its snapshot, and
+  the idempotency journal cannot disagree.
+- Added durable open-order snapshots and startup recovery so the engine can
+  rebuild active books and 24h stats after a restart.
+- Added create-order idempotency using client-provided keys, request hashing,
+  and response replay from a Postgres command journal.
+- Added real-time depth, trade, and open-order streams over SSE.
+- Covered matching, cancellation, snapshot/restore, kline bucketing, command
+  journal behavior, and cross-process decimal parity with tests.
 
 ## Technical Round Discussion Points
 
-- Why the matching engine is isolated from the API and consumes serialized commands through Redis.
-- How the system handles partial fills, maker/taker metadata, and open-order cancellation authorization.
-- Tradeoffs of an in-memory order book with Postgres snapshots versus a fully event-sourced command journal.
-- How OHLCV candles are updated from fills and why UTC interval boundaries matter for market data.
-- How idempotency keys prevent duplicate orders on client/API retries, and where pending-command recovery would be needed for crash windows.
-- Failure modes still worth solving: Redis delivery guarantees, snapshot consistency, pending command recovery, and real-time market streams.
+- Why the matching engine is isolated from the API and consumes serialized
+  commands through a Redis list.
+- How the system handles partial fills, maker/taker metadata, and open-order
+  cancellation authorization.
+- Why the command journal commits in the same transaction as the book mutation,
+  and what that does and does not make safe.
+- Tradeoffs of an in-memory order book with Postgres snapshots versus a fully
+  event-sourced command journal.
+- How OHLCV candles are updated from fills and why UTC interval boundaries
+  matter for market data.
+- How idempotency keys prevent duplicate orders, and where a pending-command
+  journal would still be needed.
+- The two distinct failure modes in decimal handling: values that throw, and
+  values that succeed while being wrong.
 
----
+## Next Work
+
+Ordered by value for a backend review.
+
+1. **Balance and holdings ledger.** Double-entry in Postgres: reserve on place,
+   release on cancel, settle on fill. The natural home is the existing
+   `persistOrderResult` transaction, which would make reservation atomic with
+   the book mutation for free. This is the largest remaining gap, since orders
+   are currently unconstrained by funds.
+2. **Seed script** so the stack demos a populated book without manual curl.
+3. **API integration tests** with supertest. The API layer is the least-covered
+   part of the codebase.
+4. **Pending-command journal** to close the crash window between book mutation
+   and its write.
+5. **Authentication.** `userId` is currently caller-supplied.
 
 ## Deferred Frontend Plan
+
+Superseded in part: the frontend now exists as a working single-page client
+(`frontend/`) that consumes the SSE stream, and the API already exposes
+`/orders/open` and `/trades/recent`, which this plan originally listed as
+missing. The plan below is retained for the multi-page structure, which is
+deliberately lower priority than the backend work above.
 
 ### Purpose
 

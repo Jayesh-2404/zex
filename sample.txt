@@ -1,2 +1,0 @@
-how  do we run the pg on the local machine i have never done it before 
-
