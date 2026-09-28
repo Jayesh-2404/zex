@@ -147,3 +147,56 @@ test("restores partially filled maker orders with only remaining quantity in dep
     asks: [{ price: "12", quantity: "2" }],
   });
 });
+
+test("fills 0.3 exactly against 0.1 and 0.2 asks leaving a remainder of exactly zero", () => {
+  const book = new OrderBook("SOL_USDC");
+
+  book.addOrder(order({ id: "ask-1", price: "10", quantity: "0.1", side: "sell", userId: "maker-1" }));
+  book.addOrder(order({ id: "ask-2", price: "10", quantity: "0.2", side: "sell", userId: "maker-2" }));
+  const result = book.addOrder(order({ id: "buy-1", price: "10", quantity: "0.3", side: "buy", userId: "taker" }));
+
+  assert.deepEqual(result.fills.map((fill) => fill.quantity), ["0.1", "0.2"]);
+  assert.equal(result.remainingOrder, undefined);
+  assert.equal(result.fills[1].takerOrderId, "buy-1");
+  assert.deepEqual(book.getDepth(), { bids: [], asks: [] });
+});
+
+test("rests exactly 0.00000001 after filling 1 by 0.33333333 three times", () => {
+  const book = new OrderBook("SOL_USDC");
+
+  book.addOrder(order({ id: "ask-1", price: "10", quantity: "1", side: "sell", userId: "maker" }));
+
+  for (let i = 1; i <= 3; i += 1) {
+    const result = book.addOrder(
+      order({
+        id: `buy-${i}`,
+        price: "10",
+        quantity: "0.33333333",
+        side: "buy",
+        userId: `taker-${i}`,
+      }),
+    );
+    assert.deepEqual(result.fills.map((fill) => fill.quantity), ["0.33333333"]);
+  }
+
+  assert.deepEqual(book.getDepth(), {
+    bids: [],
+    asks: [{ price: "10", quantity: "0.00000001" }],
+  });
+
+  const [makerOrder] = book.getOpenOrders();
+  assert.equal(makerOrder.id, "ask-1");
+  assert.equal(makerOrder.filled, "0.99999999");
+});
+
+test("sums depth totals exactly so 0.1 plus 0.2 is 0.3", () => {
+  const book = new OrderBook("SOL_USDC");
+
+  book.addOrder(order({ id: "bid-1", price: "10", quantity: "0.1", side: "buy", userId: "user-1" }));
+  book.addOrder(order({ id: "bid-2", price: "10", quantity: "0.2", side: "buy", userId: "user-2" }));
+
+  assert.deepEqual(book.getDepth(), {
+    bids: [{ price: "10", quantity: "0.3" }],
+    asks: [],
+  });
+});

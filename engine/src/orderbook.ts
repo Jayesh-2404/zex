@@ -1,3 +1,5 @@
+import { fromScaled, minScaled, toScaled } from "./decimal.js";
+
 export interface Order {
   id: string;
   price: string;
@@ -26,11 +28,16 @@ export type CancelOrderResult =
   | { status: "not_found" }
   | { status: "owner_mismatch"; order: Order };
 
+const compareDesc = (a: bigint, b: bigint): number => (a > b ? -1 : a < b ? 1 : 0);
+const compareAsc = (a: bigint, b: bigint): number => (a < b ? -1 : a > b ? 1 : 0);
+
+type PriceSort = typeof compareDesc;
+
 export class OrderBook {
   private bids: Map<string, Order[]> = new Map();
   private asks: Map<string, Order[]> = new Map();
-  private bidPrices: number[] = [];
-  private askPrices: number[] = [];
+  private bidPrices: bigint[] = [];
+  private askPrices: bigint[] = [];
 
   constructor(private market: string) {}
 
@@ -40,14 +47,14 @@ export class OrderBook {
 
   restoreOpenOrder(order: Order): void {
     const side = order.side === "buy" ? "bids" : "asks";
-    const sortFn = order.side === "buy" ? (a: number, b: number) => b - a : (a: number, b: number) => a - b;
+    const sortFn = order.side === "buy" ? compareDesc : compareAsc;
     this.addToBook({ ...order }, side, sortFn);
   }
 
   getOpenOrders(): Order[] {
     return [
-      ...this.bidPrices.flatMap((price) => this.bids.get(price.toString()) ?? []),
-      ...this.askPrices.flatMap((price) => this.asks.get(price.toString()) ?? []),
+      ...this.bidPrices.flatMap((price) => this.bids.get(fromScaled(price)) ?? []),
+      ...this.askPrices.flatMap((price) => this.asks.get(fromScaled(price)) ?? []),
     ].map((order) => ({ ...order }));
   }
 
@@ -61,25 +68,27 @@ export class OrderBook {
 
   private matchBuy(order: Order): { fills: Fill[]; remainingOrder?: Order } {
     const fills: Fill[] = [];
-    let remainingQty = parseFloat(order.quantity) - parseFloat(order.filled);
+    let remainingQty = toScaled(order.quantity) - toScaled(order.filled);
+    const limitPrice = toScaled(order.price);
 
     const askPrices = [...this.askPrices];
     for (const askPrice of askPrices) {
-      if (remainingQty <= 1e-8 || askPrice > parseFloat(order.price)) break;
+      if (remainingQty <= 0n || askPrice > limitPrice) break;
 
-      const ordersAtPrice = this.asks.get(askPrice.toString())!;
+      const key = fromScaled(askPrice);
+      const ordersAtPrice = this.asks.get(key)!;
       const remaining: Order[] = [];
 
       for (const askOrder of ordersAtPrice) {
-        if (remainingQty <= 1e-8) { remaining.push(askOrder); continue; }
+        if (remainingQty <= 0n) { remaining.push(askOrder); continue; }
 
-        const askRemaining = parseFloat(askOrder.quantity) - parseFloat(askOrder.filled);
-        if (askRemaining <= 1e-8) continue;
+        const askRemaining = toScaled(askOrder.quantity) - toScaled(askOrder.filled);
+        if (askRemaining <= 0n) continue;
 
-        const fillQty = Math.min(remainingQty, askRemaining);
+        const fillQty = minScaled(remainingQty, askRemaining);
         fills.push({
           price: askOrder.price,
-          quantity: fillQty.toString(),
+          quantity: fromScaled(fillQty),
           makerOrderId: askOrder.id,
           takerOrderId: order.id,
           makerUserId: askOrder.userId,
@@ -87,25 +96,25 @@ export class OrderBook {
         });
 
         remainingQty -= fillQty;
-        order.filled = (parseFloat(order.filled) + fillQty).toString();
-        askOrder.filled = (parseFloat(askOrder.filled) + fillQty).toString();
+        order.filled = fromScaled(toScaled(order.filled) + fillQty);
+        askOrder.filled = fromScaled(toScaled(askOrder.filled) + fillQty);
 
-        if (parseFloat(askOrder.quantity) - parseFloat(askOrder.filled) > 1e-8) {
+        if (askRemaining - fillQty > 0n) {
           remaining.push(askOrder);
         }
       }
 
       if (remaining.length > 0) {
-        this.asks.set(askPrice.toString(), remaining);
+        this.asks.set(key, remaining);
       } else {
-        this.asks.delete(askPrice.toString());
+        this.asks.delete(key);
         this.askPrices = this.askPrices.filter((p) => p !== askPrice);
       }
     }
 
-    if (remainingQty > 1e-8) {
-      const remainingOrder: Order = { ...order, quantity: remainingQty.toString(), filled: "0" };
-      this.addToBook(remainingOrder, "bids", (a, b) => b - a);
+    if (remainingQty > 0n) {
+      const remainingOrder: Order = { ...order, quantity: fromScaled(remainingQty), filled: "0" };
+      this.addToBook(remainingOrder, "bids", compareDesc);
       return { fills, remainingOrder };
     }
 
@@ -114,25 +123,27 @@ export class OrderBook {
 
   private matchSell(order: Order): { fills: Fill[]; remainingOrder?: Order } {
     const fills: Fill[] = [];
-    let remainingQty = parseFloat(order.quantity) - parseFloat(order.filled);
+    let remainingQty = toScaled(order.quantity) - toScaled(order.filled);
+    const limitPrice = toScaled(order.price);
 
     const bidPrices = [...this.bidPrices];
     for (const bidPrice of bidPrices) {
-      if (remainingQty <= 1e-8 || bidPrice < parseFloat(order.price)) break;
+      if (remainingQty <= 0n || bidPrice < limitPrice) break;
 
-      const ordersAtPrice = this.bids.get(bidPrice.toString())!;
+      const key = fromScaled(bidPrice);
+      const ordersAtPrice = this.bids.get(key)!;
       const remaining: Order[] = [];
 
       for (const bidOrder of ordersAtPrice) {
-        if (remainingQty <= 1e-8) { remaining.push(bidOrder); continue; }
+        if (remainingQty <= 0n) { remaining.push(bidOrder); continue; }
 
-        const bidRemaining = parseFloat(bidOrder.quantity) - parseFloat(bidOrder.filled);
-        if (bidRemaining <= 1e-8) continue;
+        const bidRemaining = toScaled(bidOrder.quantity) - toScaled(bidOrder.filled);
+        if (bidRemaining <= 0n) continue;
 
-        const fillQty = Math.min(remainingQty, bidRemaining);
+        const fillQty = minScaled(remainingQty, bidRemaining);
         fills.push({
           price: bidOrder.price,
-          quantity: fillQty.toString(),
+          quantity: fromScaled(fillQty),
           makerOrderId: bidOrder.id,
           takerOrderId: order.id,
           makerUserId: bidOrder.userId,
@@ -140,34 +151,34 @@ export class OrderBook {
         });
 
         remainingQty -= fillQty;
-        order.filled = (parseFloat(order.filled) + fillQty).toString();
-        bidOrder.filled = (parseFloat(bidOrder.filled) + fillQty).toString();
+        order.filled = fromScaled(toScaled(order.filled) + fillQty);
+        bidOrder.filled = fromScaled(toScaled(bidOrder.filled) + fillQty);
 
-        if (parseFloat(bidOrder.quantity) - parseFloat(bidOrder.filled) > 1e-8) {
+        if (bidRemaining - fillQty > 0n) {
           remaining.push(bidOrder);
         }
       }
 
       if (remaining.length > 0) {
-        this.bids.set(bidPrice.toString(), remaining);
+        this.bids.set(key, remaining);
       } else {
-        this.bids.delete(bidPrice.toString());
+        this.bids.delete(key);
         this.bidPrices = this.bidPrices.filter((p) => p !== bidPrice);
       }
     }
 
-    if (remainingQty > 1e-8) {
-      const remainingOrder: Order = { ...order, quantity: remainingQty.toString(), filled: "0" };
-      this.addToBook(remainingOrder, "asks", (a, b) => a - b);
+    if (remainingQty > 0n) {
+      const remainingOrder: Order = { ...order, quantity: fromScaled(remainingQty), filled: "0" };
+      this.addToBook(remainingOrder, "asks", compareAsc);
       return { fills, remainingOrder };
     }
 
     return { fills };
   }
 
-  private addToBook(order: Order, side: "bids" | "asks", sortFn: (a: number, b: number) => number): void {
-    const price = parseFloat(order.price);
-    const key = price.toString();
+  private addToBook(order: Order, side: "bids" | "asks", sortFn: PriceSort): void {
+    const price = toScaled(order.price);
+    const key = fromScaled(price);
     const book = side === "bids" ? this.bids : this.asks;
     const priceArr = side === "bids" ? this.bidPrices : this.askPrices;
 
@@ -197,8 +208,8 @@ export class OrderBook {
       orders.splice(index, 1);
       if (orders.length === 0) {
         book.delete(price);
-        const numericPrice = Number(price);
-        const priceIndex = priceArr.findIndex((value) => value === numericPrice);
+        const scaledPrice = toScaled(price);
+        const priceIndex = priceArr.findIndex((value) => value === scaledPrice);
         if (priceIndex !== -1) {
           priceArr.splice(priceIndex, 1);
         }
@@ -215,15 +226,15 @@ export class OrderBook {
     const asks: { price: string; quantity: string }[] = [];
 
     for (const price of this.bidPrices) {
-      const orders = this.bids.get(price.toString())!;
-      const total = orders.reduce((s, o) => s + (parseFloat(o.quantity) - parseFloat(o.filled)), 0);
-      bids.push({ price: price.toString(), quantity: total.toString() });
+      const orders = this.bids.get(fromScaled(price))!;
+      const total = orders.reduce((s, o) => s + (toScaled(o.quantity) - toScaled(o.filled)), 0n);
+      bids.push({ price: fromScaled(price), quantity: fromScaled(total) });
     }
 
     for (const price of this.askPrices) {
-      const orders = this.asks.get(price.toString())!;
-      const total = orders.reduce((s, o) => s + (parseFloat(o.quantity) - parseFloat(o.filled)), 0);
-      asks.push({ price: price.toString(), quantity: total.toString() });
+      const orders = this.asks.get(fromScaled(price))!;
+      const total = orders.reduce((s, o) => s + (toScaled(o.quantity) - toScaled(o.filled)), 0n);
+      asks.push({ price: fromScaled(price), quantity: fromScaled(total) });
     }
 
     return { bids, asks };
