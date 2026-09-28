@@ -4,6 +4,8 @@ import { Fill, OrderBook, Order } from "./orderbook.js";
 import { TradeStore } from "./persistence.js";
 import { hashCreateOrderCommand, idempotencyConflictResponse } from "./commands.js";
 import { getUserOpenOrders } from "./openOrders.js";
+import { toScaled } from "./decimal.js";
+import { MarketStats, buildMarketStats } from "./tickerStats.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const QUEUE_KEY = "message";
@@ -13,16 +15,6 @@ const orderBooks = new Map<string, OrderBook>();
 const marketStats = new Map<string, MarketStats>();
 
 type OrderSide = "buy" | "sell";
-
-interface MarketStats {
-  firstPrice?: number;
-  lastPrice?: number;
-  high?: number;
-  low?: number;
-  volume: number;
-  quoteVolume: number;
-  trades: number;
-}
 
 function getOrderBook(market: string): OrderBook {
   if (!orderBooks.has(market)) {
@@ -40,6 +32,20 @@ async function restoreOpenOrders(tradeStore: TradeStore): Promise<void> {
 
   if (openOrders.length > 0) {
     console.log(`Restored ${openOrders.length} open orders from Postgres`);
+  }
+}
+
+async function restoreTickerStats(tradeStore: TradeStore): Promise<void> {
+  const rows = await tradeStore.loadTickerStats24h();
+  const statsByMarket = buildMarketStats(rows);
+
+  for (const [market, stats] of Object.entries(statsByMarket)) {
+    marketStats.set(market, stats);
+  }
+
+  const restoredMarkets = Object.keys(statsByMarket).length;
+  if (restoredMarkets > 0) {
+    console.log(`Restored ticker stats for ${restoredMarkets} markets from Postgres`);
   }
 }
 
@@ -106,6 +112,7 @@ async function startEngine() {
 
   await tradeStore.connect();
   await restoreOpenOrders(tradeStore);
+  await restoreTickerStats(tradeStore);
   await client.connect();
   console.log("Engine connected to Redis");
 
@@ -181,12 +188,10 @@ async function startEngine() {
           };
           const result = book.addOrder(order);
           recordFills(data.market, result.fills);
-          await tradeStore.saveFills(data.market, data.side, result.fills);
-          await tradeStore.saveOpenOrdersSnapshot(data.market, book.getOpenOrders());
 
-          const totalFilled = parseFloat(order.filled);
-          const totalQty = parseFloat(order.quantity);
-          const status = totalFilled >= totalQty - 1e-8 ? "filled" : totalFilled > 0 ? "partial" : "open";
+          const totalFilled = toScaled(order.filled);
+          const totalQty = toScaled(order.quantity);
+          const status = totalFilled >= totalQty ? "filled" : totalFilled > 0n ? "partial" : "open";
 
           response = {
             type: "ORDER_CREATED",
@@ -201,12 +206,21 @@ async function startEngine() {
               fills: result.fills,
             },
           };
-          await tradeStore.saveCommandJournalResult(
-            data.idempotencyKey,
-            data.userId,
-            "CREATE_ORDER",
-            requestHash,
-            response,
+
+          await tradeStore.persistOrderResult(
+            data.market,
+            data.side,
+            result.fills,
+            book.getOpenOrders(),
+            data.idempotencyKey
+              ? {
+                  idempotencyKey: data.idempotencyKey,
+                  userId: data.userId,
+                  commandType: "CREATE_ORDER",
+                  requestHash,
+                  response,
+                }
+              : null,
           );
 
           const affectedUsers = Array.from(
@@ -241,7 +255,7 @@ async function startEngine() {
           const book = getOrderBook(data.market);
           const cancelResult = book.cancelOrder(data.orderId, data.userId);
 
-if (cancelResult.status === "cancelled") {
+          if (cancelResult.status === "cancelled") {
             await tradeStore.saveOpenOrdersSnapshot(data.market, book.getOpenOrders());
             await publishMarketEvents(data.market, [data.userId]);
             response = {

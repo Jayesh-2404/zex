@@ -4,10 +4,11 @@ import {
   buildKlineEntries,
   getBucketStart,
   getUtcWeekStart,
+  JournalEntry,
   PersistenceClient,
   TradeStore,
 } from "./persistence.js";
-import { Fill } from "./orderbook.js";
+import { Fill, Order } from "./orderbook.js";
 
 function fill(overrides: Partial<Fill> = {}): Fill {
   return {
@@ -21,9 +22,33 @@ function fill(overrides: Partial<Fill> = {}): Fill {
   };
 }
 
+function journalEntry(overrides: Partial<JournalEntry> = {}): JournalEntry {
+  return {
+    idempotencyKey: "order-key-1",
+    userId: "user-1",
+    commandType: "CREATE_ORDER",
+    requestHash: "request-hash",
+    response: { type: "ORDER_CREATED" },
+    ...overrides,
+  };
+}
+
+function openOrder(overrides: Partial<Order> = {}): Order {
+  return {
+    id: "bid-1",
+    price: "10",
+    quantity: "2",
+    filled: "0",
+    side: "buy",
+    userId: "buyer",
+    ...overrides,
+  };
+}
+
 class FakeClient implements PersistenceClient {
   queries: { text: string; values?: unknown[] }[] = [];
   rows: unknown[] = [];
+  failOnText: string | undefined;
 
   async connect(): Promise<void> {
     return undefined;
@@ -31,7 +56,14 @@ class FakeClient implements PersistenceClient {
 
   async query(text: string, values?: unknown[]): Promise<{ rows?: unknown[] }> {
     this.queries.push({ text, values });
+    if (this.failOnText !== undefined && text.includes(this.failOnText)) {
+      throw new Error(`injected failure: ${text.trim()}`);
+    }
     return { rows: this.rows };
+  }
+
+  texts(): string[] {
+    return this.queries.map((query) => query.text.replace(/\s+/g, " ").trim());
   }
 }
 
@@ -249,4 +281,101 @@ test("saves command journal responses by idempotency key, user, and command type
     "request-hash",
     response,
   ]);
+});
+
+test("persistOrderResult writes trades, klines, snapshot, and journal inside one transaction", async () => {
+  const client = new FakeClient();
+  const store = new TradeStore(client);
+  const entry = journalEntry();
+
+  await store.connect();
+  client.queries = [];
+
+  await store.persistOrderResult(
+    "SOL_USDC",
+    "buy",
+    [fill({ price: "10.5", quantity: "0.3" })],
+    [openOrder()],
+    entry,
+  );
+
+  const texts = client.texts();
+  assert.equal(texts[0], "BEGIN");
+  assert.equal(texts.at(-1), "COMMIT");
+
+  const tradeIndex = texts.findIndex((text) => text.includes("INSERT INTO trades"));
+  const deleteIndex = texts.findIndex((text) => text.includes("DELETE FROM open_orders"));
+  const snapshotInsertIndex = texts.findIndex((text) => text.includes("INSERT INTO open_orders"));
+  const journalIndex = texts.findIndex((text) => text.includes("INSERT INTO command_journal"));
+
+  assert.ok(tradeIndex > 0);
+  assert.ok(deleteIndex > tradeIndex);
+  assert.ok(snapshotInsertIndex > deleteIndex);
+  assert.ok(journalIndex > snapshotInsertIndex);
+  assert.ok(journalIndex < texts.length - 1);
+
+  assert.deepEqual(client.queries[tradeIndex].values?.slice(0, 3), ["SOL_USDC", "10.5", "0.3"]);
+  assert.deepEqual(client.queries[snapshotInsertIndex].values, [
+    "SOL_USDC",
+    "bid-1",
+    "10",
+    "2",
+    "0",
+    "buy",
+    "buyer",
+    0,
+  ]);
+  assert.deepEqual(client.queries[journalIndex].values, [
+    "order-key-1",
+    "user-1",
+    "CREATE_ORDER",
+    "request-hash",
+    entry.response,
+  ]);
+
+  const klineUpserts = texts.filter((text) => text.includes("ON CONFLICT (market, bucket)"));
+  assert.equal(klineUpserts.length, 3);
+  assert.equal(client.queries.filter((query) => query.text === "BEGIN").length, 1);
+  assert.ok(!texts.includes("ROLLBACK"));
+});
+
+test("persistOrderResult rolls back and skips COMMIT when a write fails", async () => {
+  const client = new FakeClient();
+  const store = new TradeStore(client);
+
+  await store.connect();
+  client.queries = [];
+  client.failOnText = "INSERT INTO trades";
+
+  await store.persistOrderResult("SOL_USDC", "buy", [fill()], [openOrder()], journalEntry());
+
+  const texts = client.texts();
+  assert.equal(texts[0], "BEGIN");
+  assert.ok(texts.includes("ROLLBACK"));
+  assert.ok(!texts.includes("COMMIT"));
+});
+
+test("loads ticker stats rows for the last 24 hours", async () => {
+  const client = new FakeClient();
+  client.rows = [
+    {
+      market: "SOL_USDC",
+      first_price: "100",
+      last_price: "110.5",
+      high: "112",
+      low: "99.5",
+      volume: "12.5",
+      quote_volume: "1350.25",
+      trades: "7",
+    },
+  ];
+  const store = new TradeStore(client);
+
+  await store.connect();
+
+  const rows = await store.loadTickerStats24h();
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].market, "SOL_USDC");
+  assert.match(client.texts()[client.texts().length - 1] ?? "", /FROM\s+trades/);
+  assert.match(client.queries.at(-1)?.text ?? "", /ARRAY_AGG\(price::text ORDER BY created_at ASC\)/);
 });

@@ -1,10 +1,19 @@
 import { Client } from "pg";
 import { Fill, Order } from "./orderbook.js";
+import { TickerStatsRow } from "./tickerStats.js";
 
 type OrderSide = "buy" | "sell";
 
 export interface Queryable {
   query(text: string, values?: unknown[]): Promise<{ rows?: unknown[] }>;
+}
+
+export interface JournalEntry {
+  idempotencyKey: string;
+  userId: string;
+  commandType: string;
+  requestHash: string;
+  response: object;
 }
 
 export interface PersistenceClient extends Queryable {
@@ -126,11 +135,71 @@ export class TradeStore {
     for (const fill of fills) {
       try {
         const createdAt = new Date();
-        await this.insertTrade(market, takerSide, fill, createdAt);
-        await this.upsertKlines(market, fill, createdAt);
+        await this.insertTrade(this.client, market, takerSide, fill, createdAt);
+        await this.upsertKlines(this.client, market, fill, createdAt);
       } catch (error) {
         console.error("Failed to persist trade", error);
       }
+    }
+  }
+
+  async persistOrderResult(
+    market: string,
+    takerSide: OrderSide,
+    fills: Fill[],
+    snapshotOrders: Order[],
+    journalEntry: JournalEntry | null,
+  ): Promise<void> {
+    if (!this.ready) {
+      return;
+    }
+
+    try {
+      await this.client.query("BEGIN");
+      const createdAt = new Date();
+
+      for (const fill of fills) {
+        await this.insertTrade(this.client, market, takerSide, fill, createdAt);
+        await this.upsertKlines(this.client, market, fill, createdAt);
+      }
+
+      await this.deleteAndInsertSnapshotOrders(this.client, market, snapshotOrders);
+
+      if (journalEntry) {
+        await this.insertCommandJournalRow(this.client, journalEntry);
+      }
+
+      await this.client.query("COMMIT");
+    } catch (error) {
+      await this.client.query("ROLLBACK").catch(() => undefined);
+      console.error("Failed to persist order result atomically", error);
+    }
+  }
+
+  async loadTickerStats24h(): Promise<TickerStatsRow[]> {
+    if (!this.ready) {
+      return [];
+    }
+
+    try {
+      const result = await this.client.query(`
+        SELECT
+          market,
+          (ARRAY_AGG(price::text ORDER BY created_at ASC))[1] AS first_price,
+          (ARRAY_AGG(price::text ORDER BY created_at DESC))[1] AS last_price,
+          MAX(price)::text AS high,
+          MIN(price)::text AS low,
+          SUM(quantity)::text AS volume,
+          SUM(price * quantity)::text AS quote_volume,
+          COUNT(*)::text AS trades
+        FROM trades
+        WHERE created_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY market
+      `);
+      return (result.rows ?? []) as TickerStatsRow[];
+    } catch (error) {
+      console.error("Failed to load ticker stats", error);
+      return [];
     }
   }
 
@@ -170,20 +239,7 @@ export class TradeStore {
 
     try {
       await this.client.query("BEGIN");
-      await this.client.query("DELETE FROM open_orders WHERE market = $1", [market]);
-
-      for (const [position, order] of orders.entries()) {
-        await this.client.query(
-          `
-            INSERT INTO open_orders (
-              market, id, price, quantity, filled, side, user_id, position, updated_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-          `,
-          [market, order.id, order.price, order.quantity, order.filled, order.side, order.userId, position],
-        );
-      }
-
+      await this.deleteAndInsertSnapshotOrders(this.client, market, orders);
       await this.client.query("COMMIT");
     } catch (error) {
       await this.client.query("ROLLBACK").catch(() => undefined);
@@ -238,17 +294,13 @@ export class TradeStore {
     }
 
     try {
-      await this.client.query(
-        `
-          INSERT INTO command_journal (
-            idempotency_key, user_id, command_type, request_hash, response, created_at
-          )
-          VALUES ($1, $2, $3, $4, $5, NOW())
-          ON CONFLICT (idempotency_key, user_id, command_type)
-          DO NOTHING
-        `,
-        [idempotencyKey, userId, commandType, requestHash, response],
-      );
+      await this.insertCommandJournalRow(this.client, {
+        idempotencyKey,
+        userId,
+        commandType,
+        requestHash,
+        response,
+      });
     } catch (error) {
       console.error("Failed to write command journal", error);
     }
@@ -330,13 +382,48 @@ export class TradeStore {
     }
   }
 
+  private async deleteAndInsertSnapshotOrders(
+    client: Queryable,
+    market: string,
+    orders: Order[],
+  ): Promise<void> {
+    await client.query("DELETE FROM open_orders WHERE market = $1", [market]);
+
+    for (const [position, order] of orders.entries()) {
+      await client.query(
+        `
+          INSERT INTO open_orders (
+            market, id, price, quantity, filled, side, user_id, position, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+        `,
+        [market, order.id, order.price, order.quantity, order.filled, order.side, order.userId, position],
+      );
+    }
+  }
+
+  private async insertCommandJournalRow(client: Queryable, entry: JournalEntry): Promise<void> {
+    await client.query(
+      `
+        INSERT INTO command_journal (
+          idempotency_key, user_id, command_type, request_hash, response, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, NOW())
+        ON CONFLICT (idempotency_key, user_id, command_type)
+        DO NOTHING
+      `,
+      [entry.idempotencyKey, entry.userId, entry.commandType, entry.requestHash, entry.response],
+    );
+  }
+
   private async insertTrade(
+    client: Queryable,
     market: string,
     takerSide: OrderSide,
     fill: Fill,
     createdAt: Date,
   ): Promise<void> {
-    await this.client.query(
+    await client.query(
       `
         INSERT INTO trades (
           market, price, quantity, maker_order_id, taker_order_id,
@@ -358,11 +445,11 @@ export class TradeStore {
     );
   }
 
-  private async upsertKlines(market: string, fill: Fill, createdAt: Date): Promise<void> {
+  private async upsertKlines(client: Queryable, market: string, fill: Fill, createdAt: Date): Promise<void> {
     const entries = buildKlineEntries(market, fill, createdAt);
 
     for (const entry of entries) {
-      await this.client.query(
+      await client.query(
         `
           INSERT INTO ${entry.tableName} (
             market, bucket, start, open, high, low, close, volume, quote_volume, trades
