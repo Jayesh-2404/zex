@@ -149,12 +149,17 @@ async function startEngine() {
   }
 
   for (;;) {
+    let clientId: string | undefined;
     try {
       const result = await client.brPop(QUEUE_KEY, 0);
       if (!result) continue;
 
-      const { clientId, message } = JSON.parse(result.element);
-      const { type, data } = message;
+      const parsed = JSON.parse(result.element) as {
+        clientId: string;
+        message: { type: string; data: any };
+      };
+      clientId = parsed.clientId;
+      const { type, data } = parsed.message;
 
       let response: object;
 
@@ -314,6 +319,23 @@ async function startEngine() {
       await client.publish(clientId, JSON.stringify(response));
     } catch (error) {
       console.error("Engine error:", error);
+
+      // The caller is blocked on this reply until its timeout expires, so a
+      // swallowed error is a 5s hang rather than a failure. Always answer.
+      // Callers that need at-most-once semantics send an Idempotency-Key; the
+      // journal row commits with the book mutation, so a retry after this
+      // reply replays the original result instead of placing a second order.
+      if (clientId) {
+        await client
+          .publish(
+            clientId,
+            JSON.stringify({
+              type: "ENGINE_ERROR",
+              payload: { message: "Command could not be processed" },
+            }),
+          )
+          .catch(() => undefined);
+      }
     }
   }
 }

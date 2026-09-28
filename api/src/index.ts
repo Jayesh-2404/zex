@@ -96,10 +96,13 @@ app.get("/api/v1/health", async (_req: Request, res: Response) => {
 
 app.get("/api/v1/tickers", async (req: Request, res: Response) => {
   try {
-      const response = await RedisManager.getInstance().sendAndWait<EngineResponse<unknown[]>>({
+      const response = await (await RedisManager.getInstance()).sendAndWait<EngineResponse<unknown[]>>({
         type: "GET_TICKERS",
         data: {}
       });
+      if (response.type === "ENGINE_ERROR") {
+        return res.status(503).json(response.payload);
+      }
       res.json(response.payload);
   } catch (error) {
     console.log("Error in getting tickers ", error);
@@ -115,12 +118,15 @@ app.get("/api/v1/depth", async (req: Request, res: Response) => {
       return res.status(400).json({ message: "symbol must use SYMBOL_QUOTE format, for example SOL_USDC" });
     }
 
-    const response = await RedisManager.getInstance().sendAndWait<EngineResponse<unknown>>({
+    const response = await (await RedisManager.getInstance()).sendAndWait<EngineResponse<unknown>>({
       type: "GET_DEPTH",
       data: {
         market: symbol
       }
     });
+    if (response.type === "ENGINE_ERROR") {
+      return res.status(503).json(response.payload);
+    }
     res.status(200).json(response.payload);
   } catch (error) {
     console.log("Error in getting depth", error);
@@ -139,13 +145,16 @@ app.get("/api/v1/orders/open", async (req: Request, res: Response) => {
       return res.status(400).json({ message: "userId is required" });
     }
 
-    const response = await RedisManager.getInstance().sendAndWait<EngineResponse<unknown[]>>({
+    const response = await (await RedisManager.getInstance()).sendAndWait<EngineResponse<unknown[]>>({
       type: "GET_OPEN_ORDERS",
       data: {
         market,
         userId: userId.trim(),
       },
     });
+    if (response.type === "ENGINE_ERROR") {
+      return res.status(503).json(response.payload);
+    }
     res.status(200).json(response.payload);
   } catch (error) {
     console.log("Error in getting open orders", error);
@@ -240,7 +249,7 @@ app.listen(PORT, () => {
 async function shutdown(signal: string): Promise<void> {
   console.log(`${signal} received, shutting down API`);
   await closeKlineClient();
-  await RedisManager.getInstance().disconnect();
+  await (await RedisManager.getInstance()).disconnect();
   process.exit(0);
 }
 

@@ -1,5 +1,6 @@
 import {Request , Response , Router} from "express";
 import {RedisManager} from "../redis/redis";
+import { MAX_DECIMAL_PLACES, parsePositiveDecimal } from "../validation/decimal.js";
 
 const orderRouter = Router();
 
@@ -35,15 +36,6 @@ interface ErrorPayload {
   [key: string]: unknown;
 }
 
-function isPositiveNumberString(value: unknown): value is string {
-  if (typeof value !== "string" && typeof value !== "number") {
-    return false;
-  }
-
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0;
-}
-
 function asBodyRecord(body: unknown): Record<string, unknown> {
   return body && typeof body === "object" ? body as Record<string, unknown> : {};
 }
@@ -68,11 +60,11 @@ function validateCreateOrder(
   if (typeof market !== "string" || !/^[A-Z0-9]+_[A-Z0-9]+$/.test(market)) {
     errors.push("market must use SYMBOL_QUOTE format, for example SOL_USDC");
   }
-  if (!isPositiveNumberString(price)) {
-    errors.push("price must be a positive number");
+  if (parsePositiveDecimal(price) === null) {
+    errors.push(`price must be a positive decimal with at most ${MAX_DECIMAL_PLACES} decimal places`);
   }
-  if (!isPositiveNumberString(quantity)) {
-    errors.push("quantity must be a positive number");
+  if (parsePositiveDecimal(quantity) === null) {
+    errors.push(`quantity must be a positive decimal with at most ${MAX_DECIMAL_PLACES} decimal places`);
   }
   if (side !== "buy" && side !== "sell") {
     errors.push("side must be buy or sell");
@@ -91,8 +83,8 @@ function validateCreateOrder(
   return {
     order: {
       market: market as string,
-      price: String(price),
-      quantity: String(quantity),
+      price: parsePositiveDecimal(price)!,
+      quantity: parsePositiveDecimal(quantity)!,
       side: side as OrderSide,
       userId: (userId as string).trim(),
       idempotencyKey,
@@ -137,7 +129,7 @@ orderRouter.post('/' , async(req:Request , res: Response) => {
     }
 
     const {market , price, quantity , side , userId} = validation.order;
-    const resp = await RedisManager.getInstance().sendAndWait<EngineResponse<ErrorPayload>>({
+    const resp = await (await RedisManager.getInstance()).sendAndWait<EngineResponse<ErrorPayload>>({
       type:"CREATE_ORDER",
       data:{
         market,
@@ -151,6 +143,10 @@ orderRouter.post('/' , async(req:Request , res: Response) => {
 
     if (resp.type === "IDEMPOTENCY_KEY_CONFLICT") {
       return res.status(409).json(resp.payload);
+    }
+
+    if (resp.type === "ENGINE_ERROR") {
+      return res.status(503).json(resp.payload);
     }
 
     res.json(resp.payload);
@@ -168,7 +164,7 @@ orderRouter.delete('/:orderId' , async(req:Request , res: Response) => {
     }
 
     const { market, orderId, userId } = validation.order;
-    const resp = await RedisManager.getInstance().sendAndWait<EngineResponse<CancelOrderPayload>>({
+    const resp = await (await RedisManager.getInstance()).sendAndWait<EngineResponse<CancelOrderPayload>>({
       type:"CANCEL_ORDER",
       data:{
         market,
@@ -180,6 +176,10 @@ orderRouter.delete('/:orderId' , async(req:Request , res: Response) => {
     if (resp.type === "ORDER_CANCEL_REJECTED") {
       const status = resp.payload.reason === "ORDER_OWNER_MISMATCH" ? 403 : 404;
       return res.status(status).json(resp.payload);
+    }
+
+    if (resp.type === "ENGINE_ERROR") {
+      return res.status(503).json(resp.payload);
     }
 
     res.json(resp.payload);
