@@ -1,6 +1,7 @@
 import { Client } from "pg";
 import { Fill, Order } from "./orderbook.js";
 import { TickerStatsRow } from "./tickerStats.js";
+import { Balance, BalanceChange } from "./balances.js";
 
 type OrderSide = "buy" | "sell";
 
@@ -33,6 +34,11 @@ export interface StoredOpenOrder extends Order {
   market: string;
 }
 
+export interface BalancePersistence {
+  balances?: Balance[];
+  changes?: BalanceChange[];
+}
+
 export type CommandJournalResult =
   | { status: "miss" }
   | { status: "hit"; response: object }
@@ -51,6 +57,13 @@ interface OpenOrderRow {
   filled: string;
   side: "buy" | "sell";
   user_id: string;
+}
+
+interface BalanceRow {
+  user_id: string;
+  asset: string;
+  available: string;
+  locked: string;
 }
 
 const KLINE_INTERVALS: { tableName: KlineEntry["tableName"]; getBucket: (date: Date) => Date }[] = [
@@ -104,8 +117,7 @@ export class TradeStore {
       });
   }
 
-  async connect(): Promise<void> {
-    try {
+  async connect(): Promise<void> {    try {
       await this.client.connect();
       await this.createSchema();
       this.ready = true;
@@ -113,6 +125,10 @@ export class TradeStore {
     } catch (error) {
       console.warn("Trade persistence disabled; Postgres connection failed", error);
     }
+  }
+
+  isReady(): boolean {
+    return this.ready;
   }
 
   async close(): Promise<void> {
@@ -149,9 +165,10 @@ export class TradeStore {
     fills: Fill[],
     snapshotOrders: Order[],
     journalEntry: JournalEntry | null,
-  ): Promise<void> {
+    balancePersistence?: BalancePersistence,
+  ): Promise<boolean> {
     if (!this.ready) {
-      return;
+      return false;
     }
 
     try {
@@ -165,14 +182,46 @@ export class TradeStore {
 
       await this.deleteAndInsertSnapshotOrders(this.client, market, snapshotOrders);
 
+      if (balancePersistence) {
+        await this.persistBalances(this.client, balancePersistence);
+      }
+
       if (journalEntry) {
         await this.insertCommandJournalRow(this.client, journalEntry);
       }
 
       await this.client.query("COMMIT");
+      return true;
     } catch (error) {
       await this.client.query("ROLLBACK").catch(() => undefined);
       console.error("Failed to persist order result atomically", error);
+      return false;
+    }
+  }
+
+  async loadBalances(): Promise<Balance[]> {
+    if (!this.ready) {
+      return [];
+    }
+
+    try {
+      const result = await this.client.query(`
+        SELECT user_id, asset, available::text, locked::text
+        FROM balances
+        ORDER BY user_id, asset
+      `);
+      return (result.rows ?? []).map((row) => {
+        const balance = row as BalanceRow;
+        return {
+          userId: balance.user_id,
+          asset: balance.asset,
+          available: balance.available,
+          locked: balance.locked,
+        };
+      });
+    } catch (error) {
+      console.error("Failed to load balances", error);
+      return [];
     }
   }
 
@@ -232,18 +281,27 @@ export class TradeStore {
     }
   }
 
-  async saveOpenOrdersSnapshot(market: string, orders: Order[]): Promise<void> {
+  async saveOpenOrdersSnapshot(
+    market: string,
+    orders: Order[],
+    balancePersistence?: BalancePersistence,
+  ): Promise<boolean> {
     if (!this.ready) {
-      return;
+      return false;
     }
 
     try {
       await this.client.query("BEGIN");
       await this.deleteAndInsertSnapshotOrders(this.client, market, orders);
+      if (balancePersistence) {
+        await this.persistBalances(this.client, balancePersistence);
+      }
       await this.client.query("COMMIT");
+      return true;
     } catch (error) {
       await this.client.query("ROLLBACK").catch(() => undefined);
       console.error("Failed to persist open order snapshot", error);
+      return false;
     }
   }
 
@@ -362,6 +420,30 @@ export class TradeStore {
       CREATE INDEX IF NOT EXISTS command_journal_user_created_at_idx
         ON command_journal (user_id, created_at DESC)
     `);
+    await this.client.query(`
+      CREATE TABLE IF NOT EXISTS balances (
+        user_id TEXT NOT NULL,
+        asset TEXT NOT NULL,
+        available NUMERIC NOT NULL DEFAULT 0,
+        locked NUMERIC NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, asset),
+        CHECK (available >= 0),
+        CHECK (locked >= 0)
+      )
+    `);
+    await this.client.query(`
+      CREATE TABLE IF NOT EXISTS balance_ledger (
+        id BIGSERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        asset TEXT NOT NULL,
+        available_delta NUMERIC NOT NULL,
+        locked_delta NUMERIC NOT NULL,
+        reason TEXT NOT NULL,
+        order_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
 
     for (const { tableName } of KLINE_INTERVALS) {
       await this.client.query(`
@@ -414,6 +496,32 @@ export class TradeStore {
       `,
       [entry.idempotencyKey, entry.userId, entry.commandType, entry.requestHash, entry.response],
     );
+  }
+
+  private async persistBalances(client: Queryable, persistence: BalancePersistence): Promise<void> {
+    for (const balance of persistence.balances ?? []) {
+      await client.query(
+        `
+          INSERT INTO balances (user_id, asset, available, locked, updated_at)
+          VALUES ($1, $2, $3, $4, NOW())
+          ON CONFLICT (user_id, asset)
+          DO UPDATE SET available = EXCLUDED.available, locked = EXCLUDED.locked, updated_at = NOW()
+        `,
+        [balance.userId, balance.asset, balance.available, balance.locked],
+      );
+    }
+
+    for (const change of persistence.changes ?? []) {
+      await client.query(
+        `
+          INSERT INTO balance_ledger (
+            user_id, asset, available_delta, locked_delta, reason, order_id
+          )
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `,
+        [change.userId, change.asset, change.availableDelta, change.lockedDelta, change.reason, change.orderId ?? null],
+      );
+    }
   }
 
   private async insertTrade(

@@ -51,6 +51,16 @@ export class OrderBook {
     this.addToBook({ ...order }, side, sortFn);
   }
 
+  replaceAll(orders: Order[]): void {
+    this.bids.clear();
+    this.asks.clear();
+    this.bidPrices = [];
+    this.askPrices = [];
+    for (const order of orders) {
+      this.restoreOpenOrder(order);
+    }
+  }
+
   getOpenOrders(): Order[] {
     return [
       ...this.bidPrices.flatMap((price) => this.bids.get(fromScaled(price)) ?? []),

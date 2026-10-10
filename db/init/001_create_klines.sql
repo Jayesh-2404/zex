@@ -84,3 +84,46 @@ CREATE TABLE IF NOT EXISTS command_journal (
 
 CREATE INDEX IF NOT EXISTS command_journal_user_created_at_idx
   ON command_journal (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS balances (
+  user_id TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  available NUMERIC NOT NULL DEFAULT 0,
+  locked NUMERIC NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, asset),
+  CHECK (available >= 0),
+  CHECK (locked >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS balance_ledger (
+  id BIGSERIAL PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  available_delta NUMERIC NOT NULL,
+  locked_delta NUMERIC NOT NULL,
+  reason TEXT NOT NULL,
+  order_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO balances (user_id, asset, available)
+VALUES
+  ('user-1', 'USD', 100000),
+  ('user-1', 'ACME', 1000),
+  ('user-2', 'USD', 100000),
+  ('user-2', 'ACME', 1000)
+ON CONFLICT (user_id, asset) DO NOTHING;
+
+INSERT INTO balances (user_id, asset, available, locked)
+VALUES
+  ('user-1', 'USD', 99900, 100),
+  ('user-2', 'ACME', 990, 10)
+ON CONFLICT (user_id, asset) DO UPDATE
+SET available = EXCLUDED.available, locked = EXCLUDED.locked;
+
+INSERT INTO open_orders (market, id, price, quantity, filled, side, user_id, position)
+VALUES
+  ('ACME_USD', 'demo-buy-1', 10, 10, 0, 'buy', 'user-1', 0),
+  ('ACME_USD', 'demo-sell-1', 12, 10, 0, 'sell', 'user-2', 0)
+ON CONFLICT (market, id) DO NOTHING;

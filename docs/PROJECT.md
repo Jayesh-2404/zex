@@ -5,12 +5,12 @@ This file tracks what is built and what comes next.
 
 ## What It Is
 
-An exchange-style backend:
+An exchange-style paper-trading backend for simulated stocks:
 
 - API service for orders, depth, tickers, klines, open orders, and recent trades.
 - Separate matching engine consuming serialized commands from a Redis list.
 - Owner-checked order cancellation.
-- Postgres storage for trades, OHLCV kline aggregation, open-order snapshots, and a command journal.
+- Postgres storage for virtual balances, balance movements, trades, OHLCV kline aggregation, open-order snapshots, and a command journal.
 - Server-Sent Events stream for depth, fills, and per-user open orders.
 
 ## Services
@@ -24,20 +24,23 @@ All four run with `docker compose up -d`. See the README.
 
 ## Current Status
 
-- Engine and API both typecheck; 50 tests pass (35 engine, 15 API).
+- Engine and API both typecheck; 57 tests pass (42 engine, 15 API).
 - Price and quantity are handled as exact scaled `bigint`, validated on the API
   side against the engine's grammar and held in place by a parity test.
 - Order results persist in a single Postgres transaction covering fills, klines,
-  the open-order snapshot, and the idempotency journal row.
+  the open-order snapshot, balances, and the idempotency journal row. A failed
+  commit reverts the in-memory book, ledger, and stats and replies `ENGINE_ERROR`
+  instead of acking success; insufficient funds replies `ORDER_REJECTED` (400).
 - Engine restores open orders and 24h ticker stats from Postgres before
   consuming commands.
 - Engine replies `ENGINE_ERROR` on a failed command instead of leaving the
   caller to time out; the API surfaces it as a `503`.
 - SSE streams are live and the frontend consumes them.
+- Virtual USD and stock-share reservations, settlement, cancellation release, and insufficient-funds rejection are implemented.
 
 ## Backend Resume Story
 
-- Built an exchange-style backend with an Express API, Redis-backed
+- Built a simulated stock-exchange backend with an Express API, Redis-backed
   request/response messaging, and a separate single-writer matching engine.
 - Implemented price-time priority matching with partial fills, owner-checked
   cancellations, order book depth, and ticker statistics.
@@ -52,6 +55,7 @@ All four run with `docker compose up -d`. See the README.
 - Added create-order idempotency using client-provided keys, request hashing,
   and response replay from a Postgres command journal.
 - Added real-time depth, trade, and open-order streams over SSE.
+- Added virtual cash/share balances with exact reservation and settlement.
 - Covered matching, cancellation, snapshot/restore, kline bucketing, command
   journal behavior, and cross-process decimal parity with tests.
 
@@ -76,17 +80,12 @@ All four run with `docker compose up -d`. See the README.
 
 Ordered by value for a backend review.
 
-1. **Balance and holdings ledger.** Double-entry in Postgres: reserve on place,
-   release on cancel, settle on fill. The natural home is the existing
-   `persistOrderResult` transaction, which would make reservation atomic with
-   the book mutation for free. This is the largest remaining gap, since orders
-   are currently unconstrained by funds.
-2. **Seed script** so the stack demos a populated book without manual curl.
-3. **API integration tests** with supertest. The API layer is the least-covered
+1. **Seed script** so the stack demos a populated book without manual curl.
+2. **API integration tests** with supertest. The API layer is the least-covered
    part of the codebase.
-4. **Pending-command journal** to close the crash window between book mutation
+3. **Pending-command journal** to close the crash window between book mutation
    and its write.
-5. **Authentication.** `userId` is currently caller-supplied.
+4. **Authentication.** `userId` is currently caller-supplied.
 
 ## Deferred Frontend Plan
 
@@ -122,7 +121,7 @@ A single-page trading interface that consumes the Zex API to display market data
 ### Pages & Components
 
 #### 1. Market Overview (`/`)
-- Top bar with available symbols (SOL_USDC, etc.)
+- Top bar with available stock symbols (ACME_USD, etc.)
 - Ticker summary for each market (last price, 24h change)
 - Link to trade page per symbol
 

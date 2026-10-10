@@ -1,5 +1,5 @@
-const SCALE_DIGITS = 8;
-const SCALE = 10n ** BigInt(SCALE_DIGITS);
+export const SCALE_DIGITS = 8;
+export const SCALE = 10n ** BigInt(SCALE_DIGITS);
 const DECIMAL_PATTERN = /^(?:(\d+)(?:\.(\d*))?|\.(\d+))$/;
 
 export function toScaled(value: string): bigint {

@@ -529,6 +529,10 @@ button {
   grid-template-columns: 58px 1fr 1fr 62px 76px;
 }
 
+.balancePanel .balanceRow {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
 .cancelButton {
   min-height: 26px;
   border: 1px solid var(--line-strong);

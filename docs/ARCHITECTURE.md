@@ -42,6 +42,12 @@ together or not at all. Two properties fall out of that:
 The engine is the only writer, so ordering is total and these transactions
 cannot interleave with a competing updater.
 
+Virtual stock settlement follows the same single-writer rule. A buy order
+locks virtual USD and a sell order locks virtual shares. Fills move the locked
+asset out and credit the counterparty; cancellation releases the remaining
+reservation. The balance snapshot and immutable balance movements commit with
+the order result.
+
 ## Recovery
 
 On startup the engine rebuilds in-memory state from Postgres before it consumes
@@ -87,5 +93,5 @@ second is worse, because it succeeds and is wrong.
 - **Full snapshot per mutation.** Each order rewrites the market's entire
   `open_orders` set inside its transaction. O(book size) writes per order, which
   is fine at demo scale and the obvious thing to fix with incremental diffs.
-- **No auth, no balances.** `userId` is caller-supplied and orders are not
-  financially constrained. Scope choices, documented rather than hidden.
+- **No auth.** `userId` is caller-supplied. Balances are fictional paper-trading
+  cash and shares; there is no real-money custody or brokerage integration.

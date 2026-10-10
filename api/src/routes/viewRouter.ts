@@ -56,7 +56,7 @@ viewRouter.get("/", async (req: Request, res: Response) => {
   }
 
   try {
-    const marketName = typeof market === 'string' && /^[A-Z0-9]+_[A-Z0-9]+$/.test(market) ? market : 'SOL_USDC';
+    const marketName = typeof market === 'string' && /^[A-Z0-9]+_[A-Z0-9]+$/.test(market) ? market : 'ACME_USD';
     const query = `
       SELECT bucket, start, open, high, low, close, volume, quote_volume, trades
       FROM ${tableName}
