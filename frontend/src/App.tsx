@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
-const DEFAULT_MARKET = "SOL_USDC";
+const DEFAULT_MARKET = "ACME_USD";
 const DEFAULT_USER = "user-1";
 
 type OrderSide = "buy" | "sell";
@@ -60,6 +60,13 @@ interface OpenOrder {
   filled: string;
   side: OrderSide;
   userId: string;
+}
+
+interface Balance {
+  userId: string;
+  asset: string;
+  available: string;
+  locked: string;
 }
 
 interface Kline {
@@ -517,6 +524,31 @@ function RecentTradesPanel({ trades, error }: { trades: RecentTrade[]; error?: s
   );
 }
 
+function BalancePanel({ balances, error }: { balances: Balance[]; error?: string }) {
+  return (
+    <section className="panel balancePanel">
+      <div className="panelHeader">
+        <h2>Virtual Portfolio</h2>
+        <span>Paper trading</span>
+      </div>
+      <ErrorLine message={error} />
+      {balances.length === 0 ? (
+        <div className="emptyState">No virtual balances found.</div>
+      ) : (
+        <div className="tableList">
+          {balances.map((balance) => (
+            <div key={balance.asset} className="tableRow balanceRow">
+              <span>{balance.asset}</span>
+              <span>{formatNumber(balance.available)}</span>
+              <span>{formatNumber(balance.locked)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function App() {
   const [market, setMarket] = useState(DEFAULT_MARKET);
   const [userId, setUserId] = useState(DEFAULT_USER);
@@ -532,6 +564,7 @@ export default function App() {
   const [klines, setKlines] = useState<PanelState<Kline[]>>({ data: [] });
   const [orders, setOrders] = useState<PanelState<OpenOrder[]>>({ data: [] });
   const [trades, setTrades] = useState<PanelState<RecentTrade[]>>({ data: [] });
+  const [balances, setBalances] = useState<PanelState<Balance[]>>({ data: [] });
   const [cancellingId, setCancellingId] = useState<string>();
   const [cancelError, setCancelError] = useState<string>();
 
@@ -562,6 +595,9 @@ export default function App() {
       fetchJson<RecentTrade[]>(`/api/v1/trades/recent?market=${encodeURIComponent(market)}&limit=25`)
         .then((data) => setTrades({ data }))
         .catch((error: Error) => setTrades((current) => ({ ...current, error: error.message }))),
+      fetchJson<Balance[]>(`/api/v1/balances?userId=${encodeURIComponent(userId)}`)
+        .then((data) => setBalances({ data }))
+        .catch((error: Error) => setBalances((current) => ({ ...current, error: error.message }))),
     ]);
   }, [market, userId]);
 
@@ -723,6 +759,7 @@ export default function App() {
             cancellingId={cancellingId}
             onCancel={(orderId) => void cancelOrder(orderId)}
           />
+          <BalancePanel balances={balances.data} error={balances.error} />
         </div>
         <div className="rightStack">
           <OrderBookPanel depth={depth.data} error={depth.error} />

@@ -200,3 +200,15 @@ test("sums depth totals exactly so 0.1 plus 0.2 is 0.3", () => {
     asks: [],
   });
 });
+
+test("replaces all orders so a failed persist can revert the book", () => {
+  const book = new OrderBook("SOL_USDC");
+  book.addOrder(order({ id: "bid-1", price: "10", quantity: "2", side: "buy", userId: "buyer" }));
+
+  const snapshot = book.getOpenOrders();
+  book.addOrder(order({ id: "ask-1", price: "9", quantity: "1", side: "sell", userId: "seller" }));
+
+  book.replaceAll(snapshot);
+
+  assert.deepEqual(book.getOpenOrders(), snapshot);
+});

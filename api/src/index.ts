@@ -115,7 +115,7 @@ app.get("/api/v1/depth", async (req: Request, res: Response) => {
     const { symbol } = req.query;
 
     if (!isValidMarket(symbol)) {
-      return res.status(400).json({ message: "symbol must use SYMBOL_QUOTE format, for example SOL_USDC" });
+      return res.status(400).json({ message: "symbol must use SYMBOL_QUOTE format, for example ACME_USD" });
     }
 
     const response = await (await RedisManager.getInstance()).sendAndWait<EngineResponse<unknown>>({
@@ -139,7 +139,7 @@ app.get("/api/v1/orders/open", async (req: Request, res: Response) => {
     const { market, userId } = req.query;
 
     if (!isValidMarket(market)) {
-      return res.status(400).json({ message: "market must use SYMBOL_QUOTE format, for example SOL_USDC" });
+      return res.status(400).json({ message: "market must use SYMBOL_QUOTE format, for example ACME_USD" });
     }
     if (typeof userId !== "string" || userId.trim().length === 0) {
       return res.status(400).json({ message: "userId is required" });
@@ -162,11 +162,33 @@ app.get("/api/v1/orders/open", async (req: Request, res: Response) => {
   }
 });
 
+app.get("/api/v1/balances", async (req: Request, res: Response) => {
+  const { userId } = req.query;
+
+  if (typeof userId !== "string" || userId.trim().length === 0) {
+    return res.status(400).json({ message: "userId is required" });
+  }
+
+  try {
+    const response = await (await RedisManager.getInstance()).sendAndWait<EngineResponse<unknown[]>>({
+      type: "GET_BALANCES",
+      data: { userId: userId.trim() },
+    });
+    if (response.type === "ENGINE_ERROR") {
+      return res.status(503).json(response.payload);
+    }
+    res.status(200).json(response.payload);
+  } catch (error) {
+    console.log("Error in getting balances", error);
+    res.status(500).json({ message: "Error in getting balances" });
+  }
+});
+
 app.get("/api/v1/trades/recent", async (req: Request, res: Response) => {
   const { market } = req.query;
 
   if (!isValidMarket(market)) {
-    return res.status(400).json({ message: "market must use SYMBOL_QUOTE format, for example SOL_USDC" });
+    return res.status(400).json({ message: "market must use SYMBOL_QUOTE format, for example ACME_USD" });
   }
 
   const limit = parseLimit(req.query.limit, 25, 100);

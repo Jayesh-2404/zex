@@ -58,7 +58,7 @@ function validateCreateOrder(
   const { market, price, quantity, side, userId } = body;
 
   if (typeof market !== "string" || !/^[A-Z0-9]+_[A-Z0-9]+$/.test(market)) {
-    errors.push("market must use SYMBOL_QUOTE format, for example SOL_USDC");
+    errors.push("market must use SYMBOL_QUOTE format, for example ACME_USD");
   }
   if (parsePositiveDecimal(price) === null) {
     errors.push(`price must be a positive decimal with at most ${MAX_DECIMAL_PLACES} decimal places`);
@@ -100,7 +100,7 @@ function validateCancelOrder(orderId: unknown, body: Record<string, unknown>): {
     errors.push("orderId is required");
   }
   if (typeof market !== "string" || !/^[A-Z0-9]+_[A-Z0-9]+$/.test(market)) {
-    errors.push("market must use SYMBOL_QUOTE format, for example SOL_USDC");
+    errors.push("market must use SYMBOL_QUOTE format, for example ACME_USD");
   }
   if (typeof userId !== "string" || userId.trim().length === 0) {
     errors.push("userId is required");
@@ -143,6 +143,10 @@ orderRouter.post('/' , async(req:Request , res: Response) => {
 
     if (resp.type === "IDEMPOTENCY_KEY_CONFLICT") {
       return res.status(409).json(resp.payload);
+    }
+
+    if (resp.type === "ORDER_REJECTED") {
+      return res.status(400).json(resp.payload);
     }
 
     if (resp.type === "ENGINE_ERROR") {

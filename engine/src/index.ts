@@ -6,6 +6,9 @@ import { hashCreateOrderCommand, idempotencyConflictResponse } from "./commands.
 import { getUserOpenOrders } from "./openOrders.js";
 import { toScaled } from "./decimal.js";
 import { MarketStats, buildMarketStats } from "./tickerStats.js";
+import { VirtualLedger } from "./balances.js";
+import type { Balance } from "./balances.js";
+import type { StoredOpenOrder } from "./persistence.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const QUEUE_KEY = "message";
@@ -15,6 +18,21 @@ const orderBooks = new Map<string, OrderBook>();
 const marketStats = new Map<string, MarketStats>();
 
 type OrderSide = "buy" | "sell";
+
+// Local-dev fallback only: mirrors db/init seed data so the engine can run
+// without Postgres when DEMO_SEED=true. Docker Compose never sets DEMO_SEED,
+// so containerised behaviour is unchanged.
+const DEMO_BALANCES: Balance[] = [
+  { userId: "user-1", asset: "USD", available: "99900", locked: "100" },
+  { userId: "user-1", asset: "ACME", available: "1000", locked: "0" },
+  { userId: "user-2", asset: "USD", available: "100000", locked: "0" },
+  { userId: "user-2", asset: "ACME", available: "990", locked: "10" },
+];
+
+const DEMO_ORDERS: StoredOpenOrder[] = [
+  { market: "ACME_USD", id: "demo-buy-1", price: "10", quantity: "10", filled: "0", side: "buy", userId: "user-1" },
+  { market: "ACME_USD", id: "demo-sell-1", price: "12", quantity: "10", filled: "0", side: "sell", userId: "user-2" },
+];
 
 function getOrderBook(market: string): OrderBook {
   if (!orderBooks.has(market)) {
@@ -81,6 +99,21 @@ function formatNumber(value: number | undefined): string {
   return value === undefined ? "0" : value.toString();
 }
 
+function isInsufficientFundsError(error: unknown): boolean {
+  return error instanceof Error && /insufficient/i.test(error.message);
+}
+
+function insufficientFundsResponse(message: string): object {
+  return {
+    type: "ORDER_REJECTED",
+    payload: {
+      status: "rejected",
+      reason: "INSUFFICIENT_FUNDS",
+      message,
+    },
+  };
+}
+
 function getTickers() {
   const markets = new Set([...orderBooks.keys(), ...marketStats.keys()]);
 
@@ -109,10 +142,19 @@ function getTickers() {
 async function startEngine() {
   const client = createClient({ url: REDIS_URL });
   const tradeStore = new TradeStore();
-
   await tradeStore.connect();
+  const storedBalances = await tradeStore.loadBalances();
+  const useDemoSeed =
+    process.env.DEMO_SEED === "true" && !tradeStore.isReady() && storedBalances.length === 0;
+  const ledger = new VirtualLedger(useDemoSeed ? DEMO_BALANCES : storedBalances);
   await restoreOpenOrders(tradeStore);
   await restoreTickerStats(tradeStore);
+  if (useDemoSeed) {
+    for (const { market, ...order } of DEMO_ORDERS) {
+      getOrderBook(market).restoreOpenOrder(order);
+    }
+    console.log("DEMO_SEED enabled: seeded in-memory demo balances and orders (Postgres unreachable)");
+  }
   await client.connect();
   console.log("Engine connected to Redis");
 
@@ -191,8 +233,50 @@ async function startEngine() {
             side: data.side,
             userId: data.userId,
           };
-          const result = book.addOrder(order);
-          recordFills(data.market, result.fills);
+          // Snapshot in-memory state before mutating so a ledger, matching,
+          // or persistence failure can revert instead of diverging from Postgres.
+          const bookSnapshot = book.getOpenOrders();
+          const ledgerSnapshot = ledger.getBalances();
+          const statsSnapshot = { ...getStats(data.market) };
+
+          const revertCreate = (): void => {
+            book.replaceAll(bookSnapshot);
+            ledger.restore(ledgerSnapshot);
+            marketStats.set(data.market, { ...statsSnapshot });
+          };
+
+          try {
+            ledger.reserveOrder(data.market, order);
+          } catch (error) {
+            if (isInsufficientFundsError(error)) {
+              response = insufficientFundsResponse(
+                error instanceof Error ? error.message : "Insufficient balance",
+              );
+              break;
+            }
+            throw error;
+          }
+
+          let result: ReturnType<OrderBook["addOrder"]>;
+          try {
+            result = book.addOrder(order);
+            recordFills(data.market, result.fills);
+
+            for (const fill of result.fills) {
+              ledger.settleFill(data.market, fill, data.side === "buy" ? "sell" : "buy");
+            }
+            const remainingOrder = result.remainingOrder ?? { ...order, quantity: "0", filled: "0" };
+            ledger.reconcileOrderReservation(data.market, order, remainingOrder.quantity);
+          } catch (error) {
+            revertCreate();
+            if (isInsufficientFundsError(error)) {
+              response = insufficientFundsResponse(
+                error instanceof Error ? error.message : "Insufficient balance",
+              );
+              break;
+            }
+            throw error;
+          }
 
           const totalFilled = toScaled(order.filled);
           const totalQty = toScaled(order.quantity);
@@ -212,7 +296,7 @@ async function startEngine() {
             },
           };
 
-          await tradeStore.persistOrderResult(
+          const persisted = await tradeStore.persistOrderResult(
             data.market,
             data.side,
             result.fills,
@@ -226,7 +310,23 @@ async function startEngine() {
                   response,
                 }
               : null,
+            {
+              balances: ledger.getBalances(),
+              changes: ledger.drainChanges(),
+            },
           );
+
+          if (!persisted && !useDemoSeed) {
+            // Fail closed: Postgres did not commit, so don't ack success or
+            // emit market events. Revert and let the caller retry (the journal
+            // row rolled back with the mutation, so a retry re-executes once).
+            revertCreate();
+            response = {
+              type: "ENGINE_ERROR",
+              payload: { message: "Order could not be persisted, please retry" },
+            };
+            break;
+          }
 
           const affectedUsers = Array.from(
             new Set([data.userId, ...result.fills.map((fill) => fill.makerUserId)]),
@@ -258,10 +358,33 @@ async function startEngine() {
         }
         case "CANCEL_ORDER": {
           const book = getOrderBook(data.market);
+          const bookSnapshot = book.getOpenOrders();
+          const ledgerSnapshot = ledger.getBalances();
           const cancelResult = book.cancelOrder(data.orderId, data.userId);
 
           if (cancelResult.status === "cancelled") {
-            await tradeStore.saveOpenOrdersSnapshot(data.market, book.getOpenOrders());
+            try {
+              ledger.reconcileOrderReservation(data.market, cancelResult.order, "0");
+            } catch (error) {
+              book.replaceAll(bookSnapshot);
+              ledger.restore(ledgerSnapshot);
+              throw error;
+            }
+            const persisted = await tradeStore.saveOpenOrdersSnapshot(data.market, book.getOpenOrders(), {
+              balances: ledger.getBalances(),
+              changes: ledger.drainChanges(),
+            });
+            if (!persisted && !useDemoSeed) {
+              // Fail closed: cancel did not commit, restore the order and
+              // balances instead of acking a cancel that will reappear.
+              book.replaceAll(bookSnapshot);
+              ledger.restore(ledgerSnapshot);
+              response = {
+                type: "ENGINE_ERROR",
+                payload: { message: "Cancel could not be persisted, please retry" },
+              };
+              break;
+            }
             await publishMarketEvents(data.market, [data.userId]);
             response = {
               type: "ORDER_CANCELLED",
@@ -310,6 +433,10 @@ async function startEngine() {
             type: "OPEN_ORDERS",
             payload: getUserOpenOrders(data.market, book.getOpenOrders(), data.userId),
           };
+          break;
+        }
+        case "GET_BALANCES": {
+          response = { type: "BALANCES", payload: ledger.getBalances(data.userId) };
           break;
         }
         default:

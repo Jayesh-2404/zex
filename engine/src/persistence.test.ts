@@ -291,13 +291,15 @@ test("persistOrderResult writes trades, klines, snapshot, and journal inside one
   await store.connect();
   client.queries = [];
 
-  await store.persistOrderResult(
+  const persisted = await store.persistOrderResult(
     "SOL_USDC",
     "buy",
     [fill({ price: "10.5", quantity: "0.3" })],
     [openOrder()],
     entry,
   );
+
+  assert.equal(persisted, true);
 
   const texts = client.texts();
   assert.equal(texts[0], "BEGIN");
@@ -347,12 +349,24 @@ test("persistOrderResult rolls back and skips COMMIT when a write fails", async 
   client.queries = [];
   client.failOnText = "INSERT INTO trades";
 
-  await store.persistOrderResult("SOL_USDC", "buy", [fill()], [openOrder()], journalEntry());
+  const persisted = await store.persistOrderResult("SOL_USDC", "buy", [fill()], [openOrder()], journalEntry());
 
+  assert.equal(persisted, false);
   const texts = client.texts();
   assert.equal(texts[0], "BEGIN");
   assert.ok(texts.includes("ROLLBACK"));
   assert.ok(!texts.includes("COMMIT"));
+});
+
+test("persistOrderResult returns false when Postgres is not ready", async () => {
+  const client = new FakeClient();
+  client.failOnText = "CREATE TABLE";
+  const store = new TradeStore(client);
+
+  await store.connect();
+
+  assert.equal(await store.persistOrderResult("SOL_USDC", "buy", [], [], null), false);
+  assert.equal(await store.saveOpenOrdersSnapshot("SOL_USDC", []), false);
 });
 
 test("loads ticker stats rows for the last 24 hours", async () => {
@@ -378,4 +392,20 @@ test("loads ticker stats rows for the last 24 hours", async () => {
   assert.deepEqual(rows[0].market, "SOL_USDC");
   assert.match(client.texts()[client.texts().length - 1] ?? "", /FROM\s+trades/);
   assert.match(client.queries.at(-1)?.text ?? "", /ARRAY_AGG\(price::text ORDER BY created_at ASC\)/);
+});
+
+test("loads virtual cash and share balances", async () => {
+  const client = new FakeClient();
+  client.rows = [
+    { user_id: "user-1", asset: "USD", available: "99", locked: "1" },
+    { user_id: "user-1", asset: "ACME", available: "10", locked: "0" },
+  ];
+  const store = new TradeStore(client);
+
+  await store.connect();
+
+  assert.deepEqual(await store.loadBalances(), [
+    { userId: "user-1", asset: "USD", available: "99", locked: "1" },
+    { userId: "user-1", asset: "ACME", available: "10", locked: "0" },
+  ]);
 });
