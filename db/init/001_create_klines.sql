@@ -127,3 +127,16 @@ VALUES
   ('ACME_USD', 'demo-buy-1', 10, 10, 0, 'buy', 'user-1', 0),
   ('ACME_USD', 'demo-sell-1', 12, 10, 0, 'sell', 'user-2', 0)
 ON CONFLICT (market, id) DO NOTHING;
+
+-- Demo market history so first paint shows recent trades, a 1m candle, and
+-- 24h ticker stats (the engine restores tickers from trades < 24h old).
+-- Both fills land in the same minute bucket as the candle below.
+-- Runs once on fresh-volume init; no conflict handling needed.
+INSERT INTO trades (market, price, quantity, maker_order_id, taker_order_id, maker_user_id, taker_user_id, taker_side, created_at)
+VALUES
+  ('ACME_USD', 11, 2, 'demo-trade-sell-1', 'demo-trade-buy-1', 'user-2', 'user-1', 'buy', date_trunc('minute', NOW() - INTERVAL '5 minutes') + INTERVAL '10 seconds'),
+  ('ACME_USD', 11, 1, 'demo-trade-sell-2', 'demo-trade-buy-2', 'user-2', 'user-1', 'buy', date_trunc('minute', NOW() - INTERVAL '5 minutes') + INTERVAL '40 seconds');
+
+INSERT INTO klines_1m (market, bucket, start, open, high, low, close, volume, quote_volume, trades)
+VALUES
+  ('ACME_USD', date_trunc('minute', NOW() - INTERVAL '5 minutes'), date_trunc('minute', NOW() - INTERVAL '5 minutes'), 11, 11, 11, 11, 3, 33, 2);
