@@ -1,6 +1,7 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
+const RAW_API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
+const API_BASE_URL = RAW_API_BASE_URL.replace(/\/+$/, "");
 const DEFAULT_MARKET = "ACME_USD";
 const DEFAULT_USER = "user-1";
 
@@ -157,13 +158,36 @@ function statusTone(status?: string): string {
   return "neutral";
 }
 
-function ErrorLine({ message }: { message?: string }) {
+function ErrorLine({ message, onRetry }: { message?: string; onRetry?: () => void }) {
   if (!message) return null;
-  return <div className="errorLine">{message}</div>;
+  return (
+    <div className="errorLine">
+      <span>{message}</span>
+      {onRetry ? (
+        <button type="button" className="retryButton" onClick={onRetry}>
+          Retry
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
-function TickerStrip({ tickers, market, error }: { tickers: Ticker[]; market: string; error?: string }) {
-  const ticker = tickers.find((item) => item.symbol === market) ?? tickers[0];
+function LoadingLine({ text }: { text: string }) {
+  return <div className="emptyState loadingPulse">{text}</div>;
+}
+
+function TickerStrip({
+  tickers,
+  market,
+  error,
+  onRetry,
+}: {
+  tickers?: Ticker[];
+  market: string;
+  error?: string;
+  onRetry?: () => void;
+}) {
+  const ticker = tickers?.find((item) => item.symbol === market) ?? tickers?.[0];
 
   return (
     <section className="tickerStrip" aria-label="Ticker stats">
@@ -191,7 +215,15 @@ function TickerStrip({ tickers, market, error }: { tickers: Ticker[]; market: st
         <span className="eyebrow">Volume</span>
         <strong>{formatNumber(ticker?.volume)}</strong>
       </div>
-      <ErrorLine message={error} />
+      {onRetry ? (
+        <div>
+          <button type="button" className="retryButton" onClick={onRetry}>
+            Retry
+          </button>
+        </div>
+      ) : null}
+      <ErrorLine message={error} onRetry={onRetry} />
+      {!ticker && !error ? <LoadingLine text="Loading market data…" /> : null}
     </section>
   );
 }
@@ -347,7 +379,7 @@ function OrderResponsePanel({ responses }: { responses: OrderResponse[] }) {
   );
 }
 
-function OrderBookPanel({ depth, error }: { depth?: DepthSnapshot; error?: string }) {
+function OrderBookPanel({ depth, error, onRetry }: { depth?: DepthSnapshot; error?: string; onRetry?: () => void }) {
   const asks = useMemo(() => [...(depth?.asks ?? [])].reverse(), [depth]);
   const bids = depth?.bids ?? [];
   const maxQuantity = Math.max(
@@ -355,21 +387,57 @@ function OrderBookPanel({ depth, error }: { depth?: DepthSnapshot; error?: strin
     ...asks.map((level) => Number(level.quantity) || 0),
     ...bids.map((level) => Number(level.quantity) || 0),
   );
+  const visibleAsks = asks.slice(-8);
+  const visibleBids = bids.slice(0, 8);
+  // Asks render worst (top) -> best (bottom, nearest spread): suffix sums from the spread outward.
+  const askTotals = useMemo(() => {
+    const totals: number[] = new Array(visibleAsks.length).fill(0);
+    let running = 0;
+    for (let index = visibleAsks.length - 1; index >= 0; index -= 1) {
+      const level = visibleAsks[index];
+      running += (Number(level.price) || 0) * (Number(level.quantity) || 0);
+      totals[index] = running;
+    }
+    return totals;
+  }, [visibleAsks]);
+  // Bids render best (top) first: prefix sums from the top.
+  const bidTotals = useMemo(() => {
+    const totals: number[] = new Array(visibleBids.length).fill(0);
+    let running = 0;
+    for (let index = 0; index < visibleBids.length; index += 1) {
+      const level = visibleBids[index];
+      running += (Number(level.price) || 0) * (Number(level.quantity) || 0);
+      totals[index] = running;
+    }
+    return totals;
+  }, [visibleBids]);
 
   return (
     <section className="panel bookPanel">
       <div className="panelHeader">
         <h2>Order Book</h2>
+        {onRetry ? (
+          <button type="button" className="retryButton" onClick={onRetry}>
+            Retry
+          </button>
+        ) : null}
       </div>
-      <ErrorLine message={error} />
+      <ErrorLine message={error} onRetry={onRetry} />
+      {!depth && !error ? <LoadingLine text="Loading order book…" /> : null}
       <div className="bookHeader">
         <span>Price</span>
         <span>Size</span>
         <span>Total</span>
       </div>
       <div className="bookRows asks">
-        {asks.slice(-8).map((level) => (
-          <BookRow key={`ask-${level.price}`} level={level} maxQuantity={maxQuantity} side="ask" />
+        {visibleAsks.map((level, index) => (
+          <BookRow
+            key={`ask-${level.price}`}
+            level={level}
+            maxQuantity={maxQuantity}
+            side="ask"
+            total={askTotals[index]}
+          />
         ))}
       </div>
       <div className="spreadLine">
@@ -381,15 +449,31 @@ function OrderBookPanel({ depth, error }: { depth?: DepthSnapshot; error?: strin
         </strong>
       </div>
       <div className="bookRows bids">
-        {bids.slice(0, 8).map((level) => (
-          <BookRow key={`bid-${level.price}`} level={level} maxQuantity={maxQuantity} side="bid" />
+        {visibleBids.map((level, index) => (
+          <BookRow
+            key={`bid-${level.price}`}
+            level={level}
+            maxQuantity={maxQuantity}
+            side="bid"
+            total={bidTotals[index]}
+          />
         ))}
       </div>
     </section>
   );
 }
 
-function BookRow({ level, maxQuantity, side }: { level: DepthLevel; maxQuantity: number; side: "bid" | "ask" }) {
+function BookRow({
+  level,
+  maxQuantity,
+  side,
+  total,
+}: {
+  level: DepthLevel;
+  maxQuantity: number;
+  side: "bid" | "ask";
+  total: number;
+}) {
   const quantity = Number(level.quantity) || 0;
   const width = `${Math.min(100, (quantity / maxQuantity) * 100)}%`;
 
@@ -398,13 +482,13 @@ function BookRow({ level, maxQuantity, side }: { level: DepthLevel; maxQuantity:
       <span className="depthBar" style={{ width }} />
       <span>{formatNumber(level.price)}</span>
       <span>{formatNumber(level.quantity)}</span>
-      <span>{formatNumber(quantity)}</span>
+      <span>{formatNumber(total)}</span>
     </div>
   );
 }
 
-function ChartPanel({ klines, error }: { klines: Kline[]; error?: string }) {
-  const points = klines
+function ChartPanel({ klines, error, onRetry }: { klines?: Kline[]; error?: string; onRetry?: () => void }) {
+  const points = (klines ?? [])
     .map((item) => ({
       price: Number(item.close),
       volume: Number(item.volume),
@@ -431,9 +515,16 @@ function ChartPanel({ klines, error }: { klines: Kline[]; error?: string }) {
       <div className="panelHeader">
         <h2>Klines</h2>
         <span>1m</span>
+        {onRetry ? (
+          <button type="button" className="retryButton" onClick={onRetry}>
+            Retry
+          </button>
+        ) : null}
       </div>
-      <ErrorLine message={error} />
-      {points.length === 0 ? (
+      <ErrorLine message={error} onRetry={onRetry} />
+      {klines === undefined && !error ? (
+        <LoadingLine text="Loading klines…" />
+      ) : points.length === 0 ? (
         <div className="emptyState">No kline data for this range.</div>
       ) : (
         <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Close price chart">
@@ -459,24 +550,34 @@ function OpenOrdersPanel({
   error,
   cancellingId,
   onCancel,
+  onRetry,
 }: {
-  orders: OpenOrder[];
+  orders?: OpenOrder[];
   error?: string;
   cancellingId?: string;
   onCancel: (orderId: string) => void;
+  onRetry?: () => void;
 }) {
+  const list = orders ?? [];
   return (
     <section className="panel openOrdersPanel">
       <div className="panelHeader">
         <h2>Open Orders</h2>
-        <span>{orders.length}</span>
+        <span>{list.length}</span>
+        {onRetry ? (
+          <button type="button" className="retryButton" onClick={onRetry}>
+            Retry
+          </button>
+        ) : null}
       </div>
-      <ErrorLine message={error} />
-      {orders.length === 0 ? (
+      <ErrorLine message={error} onRetry={onRetry} />
+      {orders === undefined && !error ? (
+        <LoadingLine text="Loading open orders…" />
+      ) : list.length === 0 ? (
         <div className="emptyState">No open orders for this user.</div>
       ) : (
         <div className="tableList">
-          {orders.map((order) => (
+          {list.map((order) => (
             <div key={order.id} className="tableRow">
               <span className={order.side === "buy" ? "positive" : "negative"}>{order.side}</span>
               <span>{formatNumber(order.price)}</span>
@@ -498,19 +599,35 @@ function OpenOrdersPanel({
   );
 }
 
-function RecentTradesPanel({ trades, error }: { trades: RecentTrade[]; error?: string }) {
+function RecentTradesPanel({
+  trades,
+  error,
+  onRetry,
+}: {
+  trades?: RecentTrade[];
+  error?: string;
+  onRetry?: () => void;
+}) {
+  const list = trades ?? [];
   return (
     <section className="panel tradesPanel">
       <div className="panelHeader">
         <h2>Recent Trades</h2>
-        <span>{trades.length}</span>
+        <span>{list.length}</span>
+        {onRetry ? (
+          <button type="button" className="retryButton" onClick={onRetry}>
+            Retry
+          </button>
+        ) : null}
       </div>
-      <ErrorLine message={error} />
-      {trades.length === 0 ? (
+      <ErrorLine message={error} onRetry={onRetry} />
+      {trades === undefined && !error ? (
+        <LoadingLine text="Loading recent trades…" />
+      ) : list.length === 0 ? (
         <div className="emptyState">No recent trades.</div>
       ) : (
         <div className="tableList">
-          {trades.slice(0, 8).map((trade) => (
+          {list.slice(0, 8).map((trade) => (
             <div key={trade.id} className="tableRow">
               <span className={trade.takerSide === "buy" ? "positive" : "negative"}>{trade.takerSide}</span>
               <span>{formatNumber(trade.price)}</span>
@@ -524,19 +641,35 @@ function RecentTradesPanel({ trades, error }: { trades: RecentTrade[]; error?: s
   );
 }
 
-function BalancePanel({ balances, error }: { balances: Balance[]; error?: string }) {
+function BalancePanel({
+  balances,
+  error,
+  onRetry,
+}: {
+  balances?: Balance[];
+  error?: string;
+  onRetry?: () => void;
+}) {
+  const list = balances ?? [];
   return (
     <section className="panel balancePanel">
       <div className="panelHeader">
         <h2>Virtual Portfolio</h2>
         <span>Paper trading</span>
+        {onRetry ? (
+          <button type="button" className="retryButton" onClick={onRetry}>
+            Retry
+          </button>
+        ) : null}
       </div>
-      <ErrorLine message={error} />
-      {balances.length === 0 ? (
+      <ErrorLine message={error} onRetry={onRetry} />
+      {balances === undefined && !error ? (
+        <LoadingLine text="Loading balances…" />
+      ) : list.length === 0 ? (
         <div className="emptyState">No virtual balances found.</div>
       ) : (
         <div className="tableList">
-          {balances.map((balance) => (
+          {list.map((balance) => (
             <div key={balance.asset} className="tableRow balanceRow">
               <span>{balance.asset}</span>
               <span>{formatNumber(balance.available)}</span>
@@ -560,13 +693,14 @@ export default function App() {
   const [submitError, setSubmitError] = useState<string>();
   const [responses, setResponses] = useState<OrderResponse[]>([]);
   const [depth, setDepth] = useState<PanelState<DepthSnapshot | undefined>>({ data: undefined });
-  const [tickers, setTickers] = useState<PanelState<Ticker[]>>({ data: [] });
-  const [klines, setKlines] = useState<PanelState<Kline[]>>({ data: [] });
-  const [orders, setOrders] = useState<PanelState<OpenOrder[]>>({ data: [] });
-  const [trades, setTrades] = useState<PanelState<RecentTrade[]>>({ data: [] });
-  const [balances, setBalances] = useState<PanelState<Balance[]>>({ data: [] });
+  const [tickers, setTickers] = useState<PanelState<Ticker[] | undefined>>({ data: undefined });
+  const [klines, setKlines] = useState<PanelState<Kline[] | undefined>>({ data: undefined });
+  const [orders, setOrders] = useState<PanelState<OpenOrder[] | undefined>>({ data: undefined });
+  const [trades, setTrades] = useState<PanelState<RecentTrade[] | undefined>>({ data: undefined });
+  const [balances, setBalances] = useState<PanelState<Balance[] | undefined>>({ data: undefined });
   const [cancellingId, setCancellingId] = useState<string>();
   const [cancelError, setCancelError] = useState<string>();
+  const lastSseRetryAt = useRef(0);
 
   const loadMarketData = useCallback(async () => {
     const now = Math.floor(Date.now() / 1000);
@@ -634,12 +768,21 @@ export default function App() {
           takerSide: payload.data.takerSide,
           createdAt: payload.data.createdAt ?? new Date().toISOString(),
         };
-        setTrades((current) => ({ data: [trade, ...current.data].slice(0, 25) }));
+        setTrades((current) => ({ data: [trade, ...(current.data ?? [])].slice(0, 25) }));
       }
     };
 
+    source.onerror = () => {
+      const now = Date.now();
+      if (now - lastSseRetryAt.current < 5000) {
+        return;
+      }
+      lastSseRetryAt.current = now;
+      void loadMarketData();
+    };
+
     return () => source.close();
-  }, [market, userId]);
+  }, [market, userId, loadMarketData]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -651,9 +794,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const now = Math.floor(Date.now() / 1000);
-    const start = now - 60 * 60 * 6;
     const loadKlines = () => {
+      const now = Math.floor(Date.now() / 1000);
+      const start = now - 60 * 60 * 6;
       const klineParams = new URLSearchParams({
         market,
         interval: "1m",
@@ -727,7 +870,12 @@ export default function App() {
         <div className="connectionNote">API {API_BASE_URL}</div>
       </header>
 
-      <TickerStrip tickers={tickers.data} market={market} error={tickers.error} />
+      <TickerStrip
+        tickers={tickers.data}
+        market={market}
+        error={tickers.error}
+        onRetry={() => void loadMarketData()}
+      />
 
       <div className="layoutGrid">
         <div className="leftStack">
@@ -752,18 +900,19 @@ export default function App() {
           <OrderResponsePanel responses={responses} />
         </div>
         <div className="centerStack">
-          <ChartPanel klines={klines.data} error={klines.error} />
+          <ChartPanel klines={klines.data} error={klines.error} onRetry={() => void loadMarketData()} />
           <OpenOrdersPanel
             orders={orders.data}
             error={orders.error ?? cancelError}
             cancellingId={cancellingId}
             onCancel={(orderId) => void cancelOrder(orderId)}
+            onRetry={() => void loadMarketData()}
           />
-          <BalancePanel balances={balances.data} error={balances.error} />
+          <BalancePanel balances={balances.data} error={balances.error} onRetry={() => void loadMarketData()} />
         </div>
         <div className="rightStack">
-          <OrderBookPanel depth={depth.data} error={depth.error} />
-          <RecentTradesPanel trades={trades.data} error={trades.error} />
+          <OrderBookPanel depth={depth.data} error={depth.error} onRetry={() => void loadMarketData()} />
+          <RecentTradesPanel trades={trades.data} error={trades.error} onRetry={() => void loadMarketData()} />
         </div>
       </div>
     </main>

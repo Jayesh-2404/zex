@@ -8,6 +8,10 @@
   --paper: #ffffff;
   --wash: #f6f6f6;
   --washed: #fbfbfb;
+  --buy: #15803d;
+  --buy-bg: rgba(21, 128, 61, 0.12);
+  --sell: #dc2626;
+  --sell-bg: rgba(220, 38, 38, 0.1);
 
   color: var(--ink);
   background: var(--paper);
@@ -221,24 +225,24 @@ button {
 
 .segmented button.active.buy {
   color: var(--paper);
-  background: var(--ink);
+  background: var(--buy);
 }
 
 .segmented button.active.sell {
-  color: var(--ink);
-  background: var(--paper);
-  border-color: var(--ink);
+  color: var(--paper);
+  background: var(--sell);
+  border-color: var(--sell);
 }
 
 .primaryButton.buy {
   color: var(--paper);
-  background: var(--ink);
+  background: var(--buy);
 }
 
 .primaryButton.sell {
-  color: var(--ink);
-  background: var(--paper);
-  border: 1px solid var(--ink);
+  color: var(--paper);
+  background: var(--sell);
+  border: 1px solid var(--sell);
 }
 
 .formActions {
@@ -263,6 +267,10 @@ button {
 }
 
 .errorLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   border: 1px solid var(--ink);
   border-radius: 6px;
   padding: 8px 10px;
@@ -270,6 +278,37 @@ button {
   background: var(--washed);
   font-size: 12px;
   font-weight: 700;
+}
+
+.retryButton {
+  flex: 0 0 auto;
+  min-height: 28px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--ink-soft);
+  background: var(--paper);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.retryButton:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.loadingPulse {
+  animation: loadingPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes loadingPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
 }
 
 .emptyState {
@@ -310,7 +349,7 @@ button {
 
 .statusPill.success,
 .statusDot.success {
-  background: var(--ink);
+  background: var(--buy);
   color: var(--paper);
 }
 
@@ -323,10 +362,9 @@ button {
 
 .statusPill.danger,
 .statusDot.danger {
-  background: var(--washed);
-  color: var(--ink);
-  border: 1px solid var(--ink);
-  box-shadow: inset 0 -2px 0 var(--ink);
+  background: var(--sell);
+  color: var(--paper);
+  border: 1px solid var(--sell);
 }
 
 .statusPill.neutral,
@@ -462,18 +500,23 @@ button {
   background: rgba(0, 0, 0, 0.08);
 }
 
+.bookRow.bid .depthBar {
+  background: var(--buy-bg);
+}
+
 .bookRow.ask .depthBar {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--sell-bg);
 }
 
 .bookRow.ask span:nth-child(2),
 .negative {
-  color: var(--muted);
+  color: var(--sell);
+  font-weight: 800;
 }
 
 .bookRow.bid span:nth-child(2),
 .positive {
-  color: var(--ink);
+  color: var(--buy);
   font-weight: 800;
 }
 
