@@ -14,6 +14,30 @@ docker compose up -d
 curl http://localhost:3000/api/v1/health
 ```
 
+The trading UI is served at `http://localhost:4173`. It talks to the API
+above, so keep port `3000` mapped for the browser. The frontend waits for the
+API healthcheck before starting, so first boot lands on live data.
+
+## Demo script (60 seconds)
+
+```bash
+# 1. Start everything and check health
+docker compose up -d
+curl http://localhost:3000/api/v1/health
+
+# 2. See the seeded market: depth, a recent trade, a candle, ticker stats
+curl "http://localhost:3000/api/v1/depth?symbol=ACME_USD"
+curl "http://localhost:3000/api/v1/trades/recent?market=ACME_USD&limit=5"
+
+# 3. Place a crossing order and watch it fill, then open the UI
+curl -X POST http://localhost:3000/api/v1/order \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: demo-order-0001" \
+  -d '{"market":"ACME_USD","price":"12","quantity":"1","side":"buy","userId":"user-1"}'
+curl "http://localhost:3000/api/v1/trades/recent?market=ACME_USD&limit=5"
+# open http://localhost:4173
+```
+
 The initial Postgres volume is seeded with virtual USD, ACME shares, and a
 small ACME_USD order book. To replay the demo seed from scratch, run
 `docker compose down -v` and start the stack again.
@@ -28,7 +52,12 @@ To run the services outside Docker:
 docker compose up -d redis postgres
 npm --prefix engine install && npm --prefix engine run dev
 npm --prefix api install && npm --prefix api run dev
+npm --prefix frontend install && npm --prefix frontend run dev
 ```
+
+The Vite dev server proxies `/api/v1` to the local API, so the UI works
+without extra CORS setup. To point a built UI at another API host, build
+with `VITE_API_BASE_URL` set.
 
 The API listens on `http://localhost:3000`. Postgres is initialised from
 `db/init` when the volume is first created; `docker compose down -v` resets it.

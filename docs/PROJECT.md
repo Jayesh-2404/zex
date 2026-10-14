@@ -19,12 +19,16 @@ An exchange-style paper-trading backend for simulated stocks:
 - `engine`: Single-writer in-memory order book plus trade persistence.
 - `redis`: Command transport between API and engine.
 - `postgres`: Trades, klines, open orders, command journal.
+- `frontend`: Production React build on port `4173`.
 
-All four run with `docker compose up -d`. See the README.
+All five run with `docker compose up -d`. See the README.
 
 ## Current Status
 
-- Engine and API both typecheck; 57 tests pass (42 engine, 15 API).
+- Engine and API both typecheck; 92 tests pass (42 engine, 50 API).
+- The Express app is built in `api/src/app.ts` and `api/src/index.ts` only
+  starts the listener, so route validation is covered by integration tests
+  that run without live Redis or Postgres.
 - Price and quantity are handled as exact scaled `bigint`, validated on the API
   side against the engine's grammar and held in place by a parity test.
 - Order results persist in a single Postgres transaction covering fills, klines,
@@ -35,7 +39,10 @@ All four run with `docker compose up -d`. See the README.
   consuming commands.
 - Engine replies `ENGINE_ERROR` on a failed command instead of leaving the
   caller to time out; the API surfaces it as a `503`.
-- SSE streams are live and the frontend consumes them.
+- SSE streams are live and the frontend consumes them, with an HTTP refresh
+  fallback when the stream errors.
+- The frontend ships in compose as a production build on port `4173` and the
+  Vite dev server proxies `/api/v1` to the local API.
 - Virtual USD and stock-share reservations, settlement, cancellation release, and insufficient-funds rejection are implemented.
 
 ## Backend Resume Story
@@ -81,11 +88,25 @@ All four run with `docker compose up -d`. See the README.
 Ordered by value for a backend review.
 
 1. **Seed script** so the stack demos a populated book without manual curl.
-2. **API integration tests** with supertest. The API layer is the least-covered
-   part of the codebase.
+   Done for the demo path: `db/init/001_create_klines.sql` seeds virtual
+   balances and two resting ACME_USD orders on first volume creation, plus
+   two recent ACME_USD trades and a matching `klines_1m` candle in the same
+   minute bucket, so first paint shows depth, a recent trade, a candle, and
+   ticker stats (the engine restores 24h tickers from `trades`).
+2. **API integration tests** with supertest. Done except true end-to-end:
+   validation and error paths are covered without live services in
+   `api/src/app.validation.test.ts`, and the live paths (order placement,
+   tickers, depth, open orders, balances, klines) are covered with a stubbed
+   engine in `api/src/app.live-mocked.test.ts`. Only a full end-to-end run
+   against real Redis, Postgres, and the engine remains uncovered.
 3. **Pending-command journal** to close the crash window between book mutation
-   and its write.
-4. **Authentication.** `userId` is currently caller-supplied.
+   and its write. Explicitly deferred (est. 2-4d): it needs a migration for
+   the pending-state column plus a startup reconciler, which is out of
+   resume-fast scope. The completed-command journal and atomic commit already
+   cover the retry-after-crash case.
+4. **Authentication.** Explicitly deferred: `userId` is deliberately
+   caller-supplied because balances are fictional paper-trading cash/shares
+   with no custody, so auth would add surface without demo value.
 
 ## Deferred Frontend Plan
 
