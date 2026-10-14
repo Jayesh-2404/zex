@@ -8,14 +8,54 @@ const intervalTables: Record<string, string> = {
   '1w': 'klines_1w',
 };
 
-const client = new Client({
+const postgresConfig = {
   user: process.env.POSTGRES_USER ?? 'cex',
   host: process.env.POSTGRES_HOST ?? 'localhost',
   database: process.env.POSTGRES_DB ?? 'cex',
   password: process.env.POSTGRES_PASSWORD ?? 'cex',
   port: Number(process.env.POSTGRES_PORT ?? 5432),
-})
+}
+let client = new Client(postgresConfig);
 let postgresReady = false;
+let reconnecting: Promise<void> | undefined;
+let closing = false;
+
+// A pooled or managed Postgres closes idle sockets. pg.Client emits 'error',
+// and with no listener Node treats that as fatal and exits the process.
+function watchForErrors(target: Client): void {
+  target.on('error', (error: Error) => {
+    postgresReady = false;
+    if (closing) {
+      return;
+    }
+    console.warn(`Kline Postgres connection lost (${error.message}); reconnecting`);
+    void reconnect();
+  });
+}
+
+async function reconnect(): Promise<void> {
+  if (reconnecting) {
+    return reconnecting;
+  }
+  reconnecting = (async () => {
+    try {
+      const next = new Client(postgresConfig);
+      await next.connect();
+      client = next;
+      watchForErrors(next);
+      postgresReady = true;
+      console.log('Kline Postgres reconnected');
+    } catch (error) {
+      postgresReady = false;
+      console.warn('Kline Postgres reconnect failed', error);
+    } finally {
+      reconnecting = undefined;
+    }
+  })();
+  return reconnecting;
+}
+
+watchForErrors(client);
 client.connect().then(() => {
   postgresReady = true;
   console.log("Postgres connected for klines");
@@ -82,6 +122,7 @@ viewRouter.get("/", async (req: Request, res: Response) => {
 });
 
 export function closeKlineClient(): Promise<void> {
+  closing = true;
   return client.end().catch(() => undefined);
 }
 

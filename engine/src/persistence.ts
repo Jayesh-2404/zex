@@ -19,6 +19,7 @@ export interface JournalEntry {
 
 export interface PersistenceClient extends Queryable {
   connect(): Promise<unknown>;
+  on?(event: "error", listener: (error: Error) => void): unknown;
 }
 
 export interface KlineEntry {
@@ -104,17 +105,57 @@ export function buildKlineEntries(market: string, fill: Fill, createdAt: Date): 
 export class TradeStore {
   private client: PersistenceClient;
   private ready = false;
+  private closed = false;
+  private reconnecting: Promise<void> | undefined;
+  private createClient: () => PersistenceClient;
 
-  constructor(client?: PersistenceClient) {
-    this.client =
-      client ??
-      new Client({
-        user: process.env.POSTGRES_USER ?? "cex",
-        host: process.env.POSTGRES_HOST ?? "localhost",
-        database: process.env.POSTGRES_DB ?? "cex",
-        password: process.env.POSTGRES_PASSWORD ?? "cex",
-        port: Number(process.env.POSTGRES_PORT ?? 5432),
-      });
+  constructor(client?: PersistenceClient, createClient?: () => PersistenceClient) {
+    this.createClient =
+      createClient ??
+      (() =>
+        client ??
+        new Client({
+          user: process.env.POSTGRES_USER ?? "cex",
+          host: process.env.POSTGRES_HOST ?? "localhost",
+          database: process.env.POSTGRES_DB ?? "cex",
+          password: process.env.POSTGRES_PASSWORD ?? "cex",
+          port: Number(process.env.POSTGRES_PORT ?? 5432),
+        }));
+    this.client = client ?? this.createClient();
+    this.watchForErrors();
+  }
+
+  private watchForErrors(): void {
+    this.client.on?.("error", (error: Error) => {
+      this.ready = false;
+      if (this.closed) {
+        return;
+      }
+      console.warn(`Postgres connection lost (${error.message}); reconnecting`);
+      void this.reconnect();
+    });
+  }
+
+  private async reconnect(): Promise<void> {
+    if (this.reconnecting) {
+      return this.reconnecting;
+    }
+    this.reconnecting = (async () => {
+      try {
+        const next = this.createClient();
+        await next.connect();
+        this.client = next;
+        this.watchForErrors();
+        this.ready = true;
+        console.log("Postgres reconnected");
+      } catch (error) {
+        this.ready = false;
+        console.warn("Postgres reconnect failed", error);
+      } finally {
+        this.reconnecting = undefined;
+      }
+    })();
+    return this.reconnecting;
   }
 
   async connect(): Promise<void> {    try {
@@ -132,6 +173,7 @@ export class TradeStore {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     const end = (this.client as { end?: () => Promise<unknown> }).end;
     if (!end) {
       return;

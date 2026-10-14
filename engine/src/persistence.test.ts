@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import {
   buildKlineEntries,
   getBucketStart,
@@ -408,4 +409,51 @@ test("loads virtual cash and share balances", async () => {
     { userId: "user-1", asset: "USD", available: "99", locked: "1" },
     { userId: "user-1", asset: "ACME", available: "10", locked: "0" },
   ]);
+});
+
+class DroppableClient extends EventEmitter implements PersistenceClient {
+  connectCalls = 0;
+  failConnect = false;
+
+  async connect(): Promise<void> {
+    this.connectCalls += 1;
+    if (this.failConnect) {
+      throw new Error("injected connect failure");
+    }
+  }
+
+  async query(): Promise<{ rows?: unknown[] }> {
+    return { rows: [] };
+  }
+}
+
+test("reconnects instead of crashing when the Postgres connection drops", async () => {
+  const first = new DroppableClient();
+  const second = new DroppableClient();
+  const store = new TradeStore(first, () => second);
+
+  await store.connect();
+  assert.equal(store.isReady(), true);
+
+  // A pooled or managed Postgres closes idle sockets. pg.Client emits 'error',
+  // and with no listener Node treats that as fatal and exits the process.
+  first.emit("error", new Error("Connection terminated unexpectedly"));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(second.connectCalls, 1);
+  assert.equal(store.isReady(), true);
+});
+
+test("stays fail-closed when the connection drops and the reconnect fails", async () => {
+  const first = new DroppableClient();
+  const second = new DroppableClient();
+  second.failConnect = true;
+  const store = new TradeStore(first, () => second);
+
+  await store.connect();
+  first.emit("error", new Error("Connection terminated unexpectedly"));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(store.isReady(), false);
+  assert.equal(await store.persistOrderResult("ACME_USD", "buy", [], [], null), false);
 });
