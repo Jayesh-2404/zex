@@ -107,6 +107,36 @@ npm --prefix engine test
 npm --prefix api test
 ```
 
+## Live end-to-end verification
+
+`scripts/e2e-live.mjs` proves the whole order path against the running stack:
+it resets and boots the demo stack, a crossing buy fills the seeded resting
+sell, the trade and its 1m kline appear through the API, the buyer and seller
+balances move by exactly the traded amounts, then a non-crossing buy is
+cancelled and its reservation is released.
+
+Docker (with the Compose plugin) and Node 18+ are the only requirements; the
+script uses plain `fetch` and has no extra dependencies. The command is the
+same in PowerShell, cmd, and Git Bash:
+
+```bash
+node scripts/e2e-live.mjs
+```
+
+The script runs `docker compose down -v` first - that wipes the demo volumes,
+which is the documented reset. It exits non-zero with the first failed
+assertion and prints a `PASS` summary with the observed values on success.
+To check a stack that is already running (for example when the services are
+started outside Docker), skip the compose steps:
+
+```bash
+node scripts/e2e-live.mjs --no-compose
+```
+
+`--no-compose` expects a freshly seeded stack; run `docker compose down -v`
+after any earlier trading activity, otherwise the script's seed check fails
+with that hint. `--base-url <url>` points the checks at a different API host.
+
 ## Known limitations
 
 There is no authentication, so `userId` is caller-supplied. Balances are
