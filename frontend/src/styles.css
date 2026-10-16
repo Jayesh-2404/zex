@@ -110,6 +110,14 @@ button {
   white-space: nowrap;
 }
 
+.tickerStrip strong.positive {
+  color: var(--buy);
+}
+
+.tickerStrip strong.negative {
+  color: var(--sell);
+}
+
 .eyebrow {
   color: var(--faint);
   font-size: 11px;
@@ -231,18 +239,31 @@ button {
 .segmented button.active.sell {
   color: var(--paper);
   background: var(--sell);
-  border-color: var(--sell);
+}
+
+.segmented button:not(.active):hover {
+  color: var(--ink-soft);
 }
 
 .primaryButton.buy {
   color: var(--paper);
   background: var(--buy);
+  transition: filter 120ms ease;
 }
 
 .primaryButton.sell {
   color: var(--paper);
   background: var(--sell);
-  border: 1px solid var(--sell);
+  transition: filter 120ms ease;
+}
+
+.primaryButton:not(:disabled):hover {
+  filter: brightness(1.08);
+}
+
+:where(button, input):focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
 .formActions {
@@ -271,13 +292,21 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  border: 1px solid var(--ink);
+  border: 1px solid var(--sell);
   border-radius: 6px;
   padding: 8px 10px;
-  color: var(--ink);
-  background: var(--washed);
+  color: var(--sell);
+  background: var(--sell-bg);
   font-size: 12px;
   font-weight: 700;
+}
+
+.tickerStrip .errorLine {
+  grid-column: 1 / -1;
+  margin: 0;
+  border-radius: 0;
+  border: 0;
+  border-top: 1px solid var(--sell);
 }
 
 .retryButton {
@@ -498,6 +527,7 @@ button {
   z-index: 0;
   max-width: 100%;
   background: rgba(0, 0, 0, 0.08);
+  transition: width 180ms ease;
 }
 
 .bookRow.bid .depthBar {
@@ -553,14 +583,59 @@ button {
   stroke-width: 2.5;
 }
 
-.chartPanel rect {
-  fill: rgba(0, 0, 0, 0.28);
-}
-
 .chartPanel text {
   fill: var(--faint);
   font-size: 12px;
   font-weight: 700;
+  paint-order: stroke;
+  stroke: var(--paper);
+  stroke-width: 3px;
+}
+
+.chartPanel .areaFill {
+  fill: rgba(0, 0, 0, 0.05);
+  stroke: none;
+}
+
+.chartPanel .lastDot {
+  fill: var(--ink);
+  stroke: var(--paper);
+  stroke-width: 2;
+}
+
+.chartPanel rect.bar.up {
+  fill: rgba(21, 128, 61, 0.35);
+}
+
+.chartPanel rect.bar.down {
+  fill: rgba(220, 38, 38, 0.35);
+}
+
+.tableHead {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--faint);
+  background: var(--washed);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.openOrdersPanel .tableHead {
+  grid-template-columns: 58px 1fr 1fr 62px 76px;
+}
+
+.tradesPanel .tableHead {
+  grid-template-columns: 70px 1fr 1fr 72px;
+}
+
+.balancePanel .tableHead {
+  grid-template-columns: 1fr 1fr 1fr;
 }
 
 .openOrdersPanel .tableRow,
@@ -661,5 +736,13 @@ button {
 
   .openOrdersPanel .tableRow {
     grid-template-columns: 52px 1fr 1fr 56px 72px;
+  }
+
+  .openOrdersPanel .tableHead {
+    grid-template-columns: 52px 1fr 1fr 56px 72px;
+  }
+
+  .tradesPanel .tableHead {
+    grid-template-columns: 58px 1fr 1fr 64px;
   }
 }

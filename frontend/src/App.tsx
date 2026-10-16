@@ -215,13 +215,6 @@ function TickerStrip({
         <span className="eyebrow">Volume</span>
         <strong>{formatNumber(ticker?.volume)}</strong>
       </div>
-      {onRetry ? (
-        <div>
-          <button type="button" className="retryButton" onClick={onRetry}>
-            Retry
-          </button>
-        </div>
-      ) : null}
       <ErrorLine message={error} onRetry={onRetry} />
       {!ticker && !error ? <LoadingLine text="Loading market data…" /> : null}
     </section>
@@ -509,6 +502,10 @@ function ChartPanel({ klines, error, onRetry }: { klines?: Kline[]; error?: stri
     })
     .join(" ");
   const maxVolume = Math.max(1, ...points.map((point) => point.volume || 0));
+  const lastX = points.length === 1 ? width / 2 : width - 20;
+  const lastY = chartBottom - ((points[points.length - 1]?.price ?? min) - min) / range * (chartBottom - chartTop);
+  const firstX = points.length === 1 ? width / 2 : 20;
+  const areaPath = `${path} L ${lastX.toFixed(2)} ${chartBottom} L ${firstX.toFixed(2)} ${chartBottom} Z`;
 
   return (
     <section className="panel chartPanel">
@@ -531,14 +528,27 @@ function ChartPanel({ klines, error, onRetry }: { klines?: Kline[]; error?: stri
           <line x1="20" x2="620" y1="60" y2="60" />
           <line x1="20" x2="620" y1="125" y2="125" />
           <line x1="20" x2="620" y1="190" y2="190" />
+          <path className="areaFill" d={areaPath} />
           <path d={path} />
           {points.map((point, index) => {
             const x = points.length === 1 ? width / 2 : (index / (points.length - 1)) * (width - 40) + 20;
             const barHeight = Math.max(2, ((point.volume || 0) / maxVolume) * 28);
-            return <rect key={index} x={x - 2} y={226 - barHeight} width="4" height={barHeight} />;
+            const rising = index === 0 || point.price >= points[index - 1].price;
+            return (
+              <rect
+                key={index}
+                className={`bar ${rising ? "up" : "down"}`}
+                x={x - 2}
+                y={226 - barHeight}
+                width="4"
+                height={barHeight}
+              />
+            );
           })}
+          <line x1="20" x2="620" y1="226" y2="226" />
+          <circle className="lastDot" cx={lastX.toFixed(2)} cy={lastY.toFixed(2)} r="4" />
           <text x="24" y="24">{formatNumber(max)}</text>
-          <text x="24" y="186">{formatNumber(min)}</text>
+          <text x="24" y="40">{formatNumber(min)}</text>
         </svg>
       )}
     </section>
@@ -577,6 +587,13 @@ function OpenOrdersPanel({
         <div className="emptyState">No open orders for this user.</div>
       ) : (
         <div className="tableList">
+          <div className="tableHead" aria-hidden="true">
+            <span>Side</span>
+            <span>Price</span>
+            <span>Remaining</span>
+            <span>ID</span>
+            <span />
+          </div>
           {list.map((order) => (
             <div key={order.id} className="tableRow">
               <span className={order.side === "buy" ? "positive" : "negative"}>{order.side}</span>
@@ -627,6 +644,12 @@ function RecentTradesPanel({
         <div className="emptyState">No recent trades.</div>
       ) : (
         <div className="tableList">
+          <div className="tableHead" aria-hidden="true">
+            <span>Side</span>
+            <span>Price</span>
+            <span>Quantity</span>
+            <span>Time</span>
+          </div>
           {list.slice(0, 8).map((trade) => (
             <div key={trade.id} className="tableRow">
               <span className={trade.takerSide === "buy" ? "positive" : "negative"}>{trade.takerSide}</span>
@@ -669,6 +692,11 @@ function BalancePanel({
         <div className="emptyState">No virtual balances found.</div>
       ) : (
         <div className="tableList">
+          <div className="tableHead" aria-hidden="true">
+            <span>Asset</span>
+            <span>Available</span>
+            <span>Locked</span>
+          </div>
           {list.map((balance) => (
             <div key={balance.asset} className="tableRow balanceRow">
               <span>{balance.asset}</span>
