@@ -7,43 +7,7 @@ A simulated stock-exchange backend: an Express API, a separate TypeScript price-
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    UI["Browser<br/>React trading UI :4173"]
-
-    subgraph API["api — Express :3000"]
-        ROUTES["REST routes + SSE fan-out"]
-        RM["RedisManager.sendAndWait"]
-    end
-
-    QUEUE[("Redis list<br/>message")]
-    BUS[("Redis pub/sub<br/>reply channels · zex:events")]
-
-    subgraph ENGINE["engine — in-memory, single writer"]
-        LOOP["command loop<br/>BRPOP"]
-        BOOK["order books<br/>price–time priority"]
-        LEDGER["virtual ledger<br/>cash and share reservations"]
-        STATS["24h ticker stats"]
-    end
-
-    PG[("Postgres<br/>trades · klines · open_orders<br/>balances · balance_movements · command_journal")]
-
-    UI -->|"HTTP /api/v1/*"| ROUTES
-    ROUTES --> RM
-    RM -->|"LPUSH {clientId, command}"| QUEUE
-    QUEUE -->|"BRPOP"| LOOP
-    LOOP --> BOOK
-    LOOP --> LEDGER
-    LOOP --> STATS
-    LOOP -->|"PUBLISH clientId reply"| BUS
-    BUS -->|"reply"| RM
-    LOOP -->|"PUBLISH zex:events"| BUS
-    BUS -->|"depth · trade · openOrders"| ROUTES
-    ROUTES -->|"SSE /api/v1/stream"| UI
-    LOOP -->|"one transaction per order result"| PG
-    ROUTES -->|"direct reads: recent trades, klines"| PG
-    PG -->|"restore open orders and tickers on boot"| LOOP
-```
+![Zex architecture: browser UI to Express API to Redis to the single-writer matching engine, with Postgres](docs/archi_new.png)
 
 The engine is the only writer: orders, cancels, and reads all travel the Redis
 queue, and every reply returns on a per-request pub/sub channel. A create or
