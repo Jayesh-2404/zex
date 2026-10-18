@@ -5,6 +5,53 @@ A simulated stock-exchange backend: an Express API, a separate TypeScript price-
 - Architecture and design decisions: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Project status and next work: [docs/PROJECT.md](docs/PROJECT.md)
 
+## Architecture
+
+```mermaid
+flowchart LR
+    UI["Browser<br/>React trading UI :4173"]
+
+    subgraph API["api — Express :3000"]
+        ROUTES["REST routes + SSE fan-out"]
+        RM["RedisManager.sendAndWait"]
+    end
+
+    QUEUE[("Redis list<br/>message")]
+    BUS[("Redis pub/sub<br/>reply channels · zex:events")]
+
+    subgraph ENGINE["engine — in-memory, single writer"]
+        LOOP["command loop<br/>BRPOP"]
+        BOOK["order books<br/>price–time priority"]
+        LEDGER["virtual ledger<br/>cash and share reservations"]
+        STATS["24h ticker stats"]
+    end
+
+    PG[("Postgres<br/>trades · klines · open_orders<br/>balances · balance_movements · command_journal")]
+
+    UI -->|"HTTP /api/v1/*"| ROUTES
+    ROUTES --> RM
+    RM -->|"LPUSH {clientId, command}"| QUEUE
+    QUEUE -->|"BRPOP"| LOOP
+    LOOP --> BOOK
+    LOOP --> LEDGER
+    LOOP --> STATS
+    LOOP -->|"PUBLISH clientId reply"| BUS
+    BUS -->|"reply"| RM
+    LOOP -->|"PUBLISH zex:events"| BUS
+    BUS -->|"depth · trade · openOrders"| ROUTES
+    ROUTES -->|"SSE /api/v1/stream"| UI
+    LOOP -->|"one transaction per order result"| PG
+    ROUTES -->|"direct reads: recent trades, klines"| PG
+    PG -->|"restore open orders and tickers on boot"| LOOP
+```
+
+The engine is the only writer: orders, cancels, and reads all travel the Redis
+queue, and every reply returns on a per-request pub/sub channel. A create or
+cancel commits its trades, klines, open-order snapshot, balances, and
+idempotency journal row in one Postgres transaction, then publishes depth,
+trade, and openOrders events that the API forwards over SSE.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the reasoning.
+
 ## Quick start
 
 Everything, including the API and engine, with one command:
@@ -136,13 +183,3 @@ node scripts/e2e-live.mjs --no-compose
 `--no-compose` expects a freshly seeded stack; run `docker compose down -v`
 after any earlier trading activity, otherwise the script's seed check fails
 with that hint. `--base-url <url>` points the checks at a different API host.
-
-## Known limitations
-
-There is no authentication, so `userId` is caller-supplied. Balances are
-fictional paper-trading cash and shares, not real money or brokerage assets.
-The project does not implement market orders, auctions, corporate actions, or
-live market data; these are deliberate scope choices for a matching-engine
-demonstration. See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the reasoning and the
-tradeoffs they leave open.
