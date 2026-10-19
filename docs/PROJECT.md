@@ -25,7 +25,7 @@ All five run with `docker compose up -d`. See the README.
 
 ## Current Status
 
-- Engine and API both typecheck; 92 tests pass (42 engine, 50 API).
+- Engine and API both typecheck; 94 tests pass (44 engine, 50 API).
 - The Express app is built in `api/src/app.ts` and `api/src/index.ts` only
   starts the listener, so route validation is covered by integration tests
   that run without live Redis or Postgres.
