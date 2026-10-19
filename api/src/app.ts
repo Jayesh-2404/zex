@@ -4,7 +4,7 @@ import { Client } from "pg";
 import { createClient } from "redis";
 import orderRouter from "./routes/order.js";
 import viewRouter, { closeKlineClient } from "./routes/viewRouter.js";
-import { RedisManager } from "./redis/redis.js";
+import { RedisManager, REDIS_CLIENT_OPTIONS } from "./redis/redis.js";
 
 export const app = express();
 app.use(express.json());
@@ -46,7 +46,7 @@ export function createPostgresClient(): Client {
 }
 
 async function checkRedis(): Promise<{ status: "ok" | "error"; message?: string }> {
-  const client = createClient({ url: process.env.REDIS_URL ?? "redis://localhost:6379" });
+  const client = createClient({ url: process.env.REDIS_URL ?? "redis://localhost:6379", ...REDIS_CLIENT_OPTIONS });
   try {
     await client.connect();
     await client.ping();
@@ -246,7 +246,10 @@ app.get("/api/v1/stream", async (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
 
-  const subscriber = createClient({ url: process.env.REDIS_URL ?? "redis://localhost:6379" });
+  const subscriber = createClient({
+    url: process.env.REDIS_URL ?? "redis://localhost:6379",
+    ...REDIS_CLIENT_OPTIONS,
+  });
   const heartbeat = setInterval(() => res.write(": ping\n\n"), 15000);
 
   try {

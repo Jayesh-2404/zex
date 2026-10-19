@@ -4,16 +4,21 @@ import {v4 as uuidv4} from 'uuid';
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const DEFAULT_TIMEOUT_MS = 5000;
 
+// node-redis 6 negotiates RESP 3 by default, which Redis servers older than 6.0
+// (such as the Redis 5 used for local development) reject, leaving the client
+// retrying forever. Compose runs Redis 7, so RESP 2 is the portable choice.
+export const REDIS_CLIENT_OPTIONS = { RESP: 2 } as const;
+
 export class RedisManager{
   //pusblishing to engine via queue
-  private publisher : RedisClientType;
-  private client : RedisClientType;//recieving via pub subs
+  private publisher : RedisClientType<{}, {}, {}, 2>;
+  private client : RedisClientType<{}, {}, {}, 2>;//recieving via pub subs
   private static instance : RedisManager;
   private static connecting : Promise<RedisManager> | undefined;
 
   private constructor(){
-    this.client = createClient({ url: REDIS_URL });
-    this.publisher = createClient({ url: REDIS_URL });
+    this.client = createClient({ url: REDIS_URL, ...REDIS_CLIENT_OPTIONS });
+    this.publisher = createClient({ url: REDIS_URL, ...REDIS_CLIENT_OPTIONS });
   }
 
   private async connect(): Promise<this> {

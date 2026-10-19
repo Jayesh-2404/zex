@@ -140,7 +140,14 @@ function getTickers() {
 }
 
 async function startEngine() {
-  const client = createClient({ url: REDIS_URL });
+  // BRPOP with a zero timeout parks the loop until a command arrives, so the
+  // client-wide command timeout must stay off; node-redis 6 defaults it to 5s.
+  // RESP 2 matches the API clients and keeps Redis 5 dev servers usable.
+  const client = createClient({
+    url: REDIS_URL,
+    RESP: 2,
+    commandOptions: { timeout: 0 },
+  });
   const tradeStore = new TradeStore();
   await tradeStore.connect();
   const storedBalances = await tradeStore.loadBalances();
