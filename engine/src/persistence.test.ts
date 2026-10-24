@@ -370,29 +370,27 @@ test("persistOrderResult returns false when Postgres is not ready", async () => 
   assert.equal(await store.saveOpenOrdersSnapshot("SOL_USDC", []), false);
 });
 
-test("loads ticker stats rows for the last 24 hours", async () => {
+test("loads raw tick rows for the last 24 hours", async () => {
   const client = new FakeClient();
   client.rows = [
     {
       market: "SOL_USDC",
-      first_price: "100",
-      last_price: "110.5",
-      high: "112",
-      low: "99.5",
-      volume: "12.5",
-      quote_volume: "1350.25",
-      trades: "7",
+      price: "100",
+      quantity: "2",
+      created_at: new Date("2026-01-01T00:00:00Z"),
     },
   ];
   const store = new TradeStore(client);
 
   await store.connect();
 
-  const rows = await store.loadTickerStats24h();
+  const rows = await store.loadTickerTicks24h();
   assert.equal(rows.length, 1);
   assert.deepEqual(rows[0].market, "SOL_USDC");
-  assert.match(client.texts()[client.texts().length - 1] ?? "", /FROM\s+trades/);
-  assert.match(client.queries.at(-1)?.text ?? "", /ARRAY_AGG\(price::text ORDER BY created_at ASC\)/);
+  const query = client.queries.at(-1)?.text ?? "";
+  assert.match(query, /FROM\s+trades/);
+  assert.match(query, /INTERVAL '24 hours'/);
+  assert.match(query, /ORDER BY created_at ASC/);
 });
 
 test("loads virtual cash and share balances", async () => {
