@@ -1,6 +1,6 @@
 import { Client } from "pg";
 import { Fill, Order } from "./orderbook.js";
-import { TickerStatsRow } from "./tickerStats.js";
+import { TickerTickRow } from "./tickerStats.js";
 import { Balance, BalanceChange } from "./balances.js";
 
 type OrderSide = "buy" | "sell";
@@ -267,7 +267,7 @@ export class TradeStore {
     }
   }
 
-  async loadTickerStats24h(): Promise<TickerStatsRow[]> {
+  async loadTickerTicks24h(): Promise<TickerTickRow[]> {
     if (!this.ready) {
       return [];
     }
@@ -276,20 +276,16 @@ export class TradeStore {
       const result = await this.client.query(`
         SELECT
           market,
-          (ARRAY_AGG(price::text ORDER BY created_at ASC))[1] AS first_price,
-          (ARRAY_AGG(price::text ORDER BY created_at DESC))[1] AS last_price,
-          MAX(price)::text AS high,
-          MIN(price)::text AS low,
-          SUM(quantity)::text AS volume,
-          SUM(price * quantity)::text AS quote_volume,
-          COUNT(*)::text AS trades
+          price::text,
+          quantity::text,
+          created_at
         FROM trades
         WHERE created_at >= NOW() - INTERVAL '24 hours'
-        GROUP BY market
+        ORDER BY created_at ASC
       `);
-      return (result.rows ?? []) as TickerStatsRow[];
+      return (result.rows ?? []) as TickerTickRow[];
     } catch (error) {
-      console.error("Failed to load ticker stats", error);
+      console.error("Failed to load ticker ticks", error);
       return [];
     }
   }

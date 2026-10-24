@@ -5,7 +5,7 @@ import { TradeStore } from "./persistence.js";
 import { hashCreateOrderCommand, idempotencyConflictResponse } from "./commands.js";
 import { getUserOpenOrders } from "./openOrders.js";
 import { toScaled } from "./decimal.js";
-import { MarketStats, buildMarketStats } from "./tickerStats.js";
+import { TickerTick, TickerWindow } from "./tickerStats.js";
 import { VirtualLedger } from "./balances.js";
 import type { Balance } from "./balances.js";
 import type { StoredOpenOrder } from "./persistence.js";
@@ -15,7 +15,7 @@ const QUEUE_KEY = "message";
 const EVENTS_CHANNEL = "zex:events";
 
 const orderBooks = new Map<string, OrderBook>();
-const marketStats = new Map<string, MarketStats>();
+const tickerWindows = new Map<string, TickerWindow>();
 
 type OrderSide = "buy" | "sell";
 
@@ -54,28 +54,41 @@ async function restoreOpenOrders(tradeStore: TradeStore): Promise<void> {
 }
 
 async function restoreTickerStats(tradeStore: TradeStore): Promise<void> {
-  const rows = await tradeStore.loadTickerStats24h();
-  const statsByMarket = buildMarketStats(rows);
+  const rows = await tradeStore.loadTickerTicks24h();
+  const ticksByMarket = new Map<string, TickerTick[]>();
 
-  for (const [market, stats] of Object.entries(statsByMarket)) {
-    marketStats.set(market, stats);
+  for (const row of rows) {
+    const price = Number(row.price);
+    const quantity = Number(row.quantity);
+    const at = new Date(row.created_at).getTime();
+
+    if (!Number.isFinite(price) || !Number.isFinite(quantity) || !Number.isFinite(at)) {
+      continue;
+    }
+
+    const ticks = ticksByMarket.get(row.market) ?? [];
+    ticks.push({ at, price, quantity });
+    ticksByMarket.set(row.market, ticks);
   }
 
-  const restoredMarkets = Object.keys(statsByMarket).length;
-  if (restoredMarkets > 0) {
-    console.log(`Restored ticker stats for ${restoredMarkets} markets from Postgres`);
+  for (const [market, ticks] of ticksByMarket) {
+    getTickerWindow(market).seed(ticks);
+  }
+
+  if (ticksByMarket.size > 0) {
+    console.log(`Restored 24h ticker window for ${ticksByMarket.size} markets from Postgres`);
   }
 }
 
-function getStats(market: string): MarketStats {
-  if (!marketStats.has(market)) {
-    marketStats.set(market, { volume: 0, quoteVolume: 0, trades: 0 });
+function getTickerWindow(market: string): TickerWindow {
+  if (!tickerWindows.has(market)) {
+    tickerWindows.set(market, new TickerWindow());
   }
-  return marketStats.get(market)!;
+  return tickerWindows.get(market)!;
 }
 
 function recordFills(market: string, fills: Fill[]): void {
-  const stats = getStats(market);
+  const window = getTickerWindow(market);
 
   for (const fill of fills) {
     const price = Number(fill.price);
@@ -85,13 +98,7 @@ function recordFills(market: string, fills: Fill[]): void {
       continue;
     }
 
-    stats.firstPrice ??= price;
-    stats.lastPrice = price;
-    stats.high = stats.high === undefined ? price : Math.max(stats.high, price);
-    stats.low = stats.low === undefined ? price : Math.min(stats.low, price);
-    stats.volume += quantity;
-    stats.quoteVolume += price * quantity;
-    stats.trades += 1;
+    window.add(price, quantity);
   }
 }
 
@@ -115,10 +122,10 @@ function insufficientFundsResponse(message: string): object {
 }
 
 function getTickers() {
-  const markets = new Set([...orderBooks.keys(), ...marketStats.keys()]);
+  const markets = new Set([...orderBooks.keys(), ...tickerWindows.keys()]);
 
   return [...markets].map((market) => {
-    const stats = getStats(market);
+    const stats = getTickerWindow(market).snapshot();
     const firstPrice = stats.firstPrice ?? 0;
     const lastPrice = stats.lastPrice ?? 0;
     const priceChange = lastPrice - firstPrice;
@@ -244,12 +251,12 @@ async function startEngine() {
           // or persistence failure can revert instead of diverging from Postgres.
           const bookSnapshot = book.getOpenOrders();
           const ledgerSnapshot = ledger.getBalances();
-          const statsSnapshot = { ...getStats(data.market) };
+          const tickerSnapshot = getTickerWindow(data.market).clone();
 
           const revertCreate = (): void => {
             book.replaceAll(bookSnapshot);
             ledger.restore(ledgerSnapshot);
-            marketStats.set(data.market, { ...statsSnapshot });
+            getTickerWindow(data.market).restore(tickerSnapshot);
           };
 
           try {
